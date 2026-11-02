@@ -5,6 +5,7 @@ import {
   BatteryCharging,
   Bot,
   Car,
+  ChartNoAxesCombined,
   Clock3,
   Cog,
   Leaf,
@@ -63,7 +64,7 @@ const recoveryStages = [
   { name: 'BATTERY STORAGE SYSTEM', label: ['BATTERY', 'STORAGE', 'SYSTEM'], position: 925, color: 'stored', description: 'Stores recovered electrical energy for later use.', purpose: 'Adds recovered energy to the vehicle battery.', principle: 'Controlled current drives electrochemical reactions that store energy in the cells.', input: 'Conditioned electrical power', output: 'Stored electrical energy', importance: 'Preserves recovered power for future vehicle use.' },
 ] as const
 
-const chartTabs = ['rpm', 'temperature', 'pressure', 'recoveredPower'] as const
+const chartTabs = ['rpm', 'temperature', 'pressure', 'recoveredPower', 'batteryCharge'] as const
 type ChartTab = (typeof chartTabs)[number]
 
 const chartTabLabels: Record<ChartTab, TranslationKey> = {
@@ -71,6 +72,7 @@ const chartTabLabels: Record<ChartTab, TranslationKey> = {
   temperature: 'chart.temperature',
   pressure: 'chart.pressure',
   recoveredPower: 'chart.recoveredPower',
+  batteryCharge: 'energy.batteryCharge',
 }
 
 const assistantChips = ['batteryEta', 'rpm', 'temperature', 'pressure', 'allSystems'] as const
@@ -113,6 +115,7 @@ function Dashboard() {
   })
   const [isMute, setIsMute] = useState<boolean>(() => localStorage.getItem('thermos-mute') === 'true')
   const [driverModeOpen, setDriverModeOpen] = useState(false)
+  const [isGraphOpen, setIsGraphOpen] = useState(false)
 
   useEffect(() => {
     localStorage.setItem('thermos-theme', theme)
@@ -128,16 +131,16 @@ function Dashboard() {
 
   return (
     <main className="dashboard" data-theme={theme} data-lang={language}>
-      <TopStatusBar theme={theme} onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')} volume={effectiveVolume} setVolume={setVolume} isMute={isMute} setIsMute={setIsMute} onOpenDriver={() => setDriverModeOpen(true)} />
+      <TopStatusBar theme={theme} onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')} volume={effectiveVolume} setVolume={setVolume} isMute={isMute} setIsMute={setIsMute} onOpenDriver={() => setDriverModeOpen(true)} onOpenGraph={() => setIsGraphOpen(true)} />
       <section className="dashboard-grid">
         <LeftTelemetry />
         <section className="center-stack">
           <EnergyRecoveryPanel />
-          <TelemetryChart />
         </section>
         <AIAssistantPanel volume={effectiveVolume} />
       </section>
       <DiagnosticFooter />
+      {isGraphOpen && <TelemetryChart onClose={() => setIsGraphOpen(false)} />}
       {driverModeOpen && (
         <DriverModePanel onClose={() => setDriverModeOpen(false)} volume={effectiveVolume} />
       )}
@@ -147,7 +150,7 @@ function Dashboard() {
 
 /* ================= Top Status Bar ================= */
 
-function TopStatusBar({ theme, onToggleTheme, volume, setVolume, isMute, setIsMute, onOpenDriver }: { theme: Theme; onToggleTheme: () => void; volume: number; setVolume: (v: number) => void; isMute: boolean; setIsMute: (m: boolean) => void; onOpenDriver: () => void }) {
+function TopStatusBar({ theme, onToggleTheme, volume, setVolume, isMute, setIsMute, onOpenDriver, onOpenGraph }: { theme: Theme; onToggleTheme: () => void; volume: number; setVolume: (v: number) => void; isMute: boolean; setIsMute: (m: boolean) => void; onOpenDriver: () => void; onOpenGraph: () => void }) {
   const { language, setLanguage, t } = useLanguage()
   const [now, setNow] = useState(() => new Date())
   const [volumeOpen, setVolumeOpen] = useState(false)
@@ -210,6 +213,11 @@ function TopStatusBar({ theme, onToggleTheme, volume, setVolume, isMute, setIsMu
           <strong>{formatHeaderTime(language, now)}</strong>
         </div>
       </div>
+
+      <button className="graph-mode-button" type="button" onClick={onOpenGraph} aria-label="Performance Analytics" title="Performance Analytics">
+        <ChartNoAxesCombined size={21} aria-hidden="true" />
+        <i aria-hidden="true" />
+      </button>
 
       <div className="topbar-actions">
         <div className="language-switch">
@@ -707,12 +715,20 @@ export function MetricCard({
 
 /* ================= Telemetry Chart ================= */
 
-function TelemetryChart() {
+function TelemetryChart({ onClose }: { onClose: () => void }) {
   const { t } = useLanguage()
-  const { history } = useTelemetry()
+  const { history, telemetry } = useTelemetry()
   const [activeTab, setActiveTab] = useState<ChartTab>('rpm')
   const [range, setRange] = useState('1M')
   const ranges = ['1M', '5M', '15M']
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
 
   const filteredHistory = useMemo(() => {
     const count = range === '1M' ? 20 : range === '5M' ? 50 : 100
@@ -724,7 +740,8 @@ function TelemetryChart() {
       if (activeTab === 'rpm') return { time: d.timeLabel, value: d.rpm }
       if (activeTab === 'temperature') return { time: d.timeLabel, value: d.temperatureCelsius }
       if (activeTab === 'pressure') return { time: d.timeLabel, value: d.pressureBar }
-      return { time: d.timeLabel, value: d.recoveredPowerWatts }
+      if (activeTab === 'recoveredPower') return { time: d.timeLabel, value: d.recoveredPowerWatts }
+      return { time: d.timeLabel, value: d.batteryCharge }
     })
   }, [filteredHistory, activeTab])
 
@@ -734,16 +751,19 @@ function TelemetryChart() {
     if (activeTab === 'rpm') return last.rpm
     if (activeTab === 'temperature') return last.temperatureCelsius
     if (activeTab === 'pressure') return last.pressureBar
-    return last.recoveredPowerWatts
+    if (activeTab === 'recoveredPower') return last.recoveredPowerWatts
+    return last.batteryCharge
   }, [filteredHistory, activeTab])
 
-  const unit = activeTab === 'rpm' ? 'RPM' : activeTab === 'temperature' ? '°C' : activeTab === 'pressure' ? 'bar' : 'W'
+  const unit = activeTab === 'rpm' ? 'RPM' : activeTab === 'temperature' ? '°C' : activeTab === 'pressure' ? 'bar' : activeTab === 'batteryCharge' ? '%' : 'W'
 
   const yAxisConfig = useMemo(() => {
     if (activeTab === 'rpm') return { domain: [0, 8000], ticks: [0, 2000, 4000, 6000, 8000], fmt: (v: number) => (v === 0 ? '0' : `${v / 1000}K`) }
     if (activeTab === 'temperature') return { domain: [0, 350], ticks: [0, 100, 200, 300, 350], fmt: (v: number) => `${v}°C` }
     if (activeTab === 'pressure') return { domain: [0, 3.5], ticks: [0, 1, 2, 3], fmt: (v: number) => `${v} bar` }
-    return { domain: [0, 800], ticks: [0, 200, 400, 600, 800], fmt: (v: number) => `${v} W` }
+    if (activeTab === 'batteryCharge') return { domain: [0, 100], ticks: [0, 25, 50, 75, 100], fmt: (v: number) => `${v}%` }
+    if (activeTab === 'recoveredPower') return { domain: [0, 800], ticks: [0, 200, 400, 600, 800], fmt: (v: number) => `${v} W` }
+    return { domain: [0, 8000], ticks: [0, 2000, 4000, 6000, 8000], fmt: (v: number) => `${v} RPM` }
   }, [activeTab])
 
   // Gradient id unique per tab to avoid conflicts
@@ -753,75 +773,74 @@ function TelemetryChart() {
     if (activeTab === 'rpm') return `${currentValue.toLocaleString()} RPM`
     if (activeTab === 'temperature') return `${currentValue}°C`
     if (activeTab === 'pressure') return `${currentValue.toFixed(1)} bar`
-    return `${currentValue} W`
+    if (activeTab === 'recoveredPower') return `${currentValue} W`
+    if (activeTab === 'batteryCharge') return `${Math.round(currentValue)}%`
+    return `${currentValue.toLocaleString()} RPM`
   }, [currentValue, activeTab])
 
-  const fixedSub = chartData.length ? chartData[chartData.length - 1].time : '--:--'
-
   return (
-    <article className="panel chart-panel">
-      <div className="chart-controls">
-        <div className="tabs">
-          {chartTabs.map((tab) => (
-            <button
-              className={activeTab === tab ? 'active' : ''}
-              key={tab}
-              type="button"
-              onClick={() => setActiveTab(tab)}
-            >
-              {t(chartTabLabels[tab])}
-            </button>
-          ))}
+    <div className="analytics-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+      <section className="analytics-panel" role="dialog" aria-modal="true" aria-labelledby="analytics-title">
+        <header className="analytics-heading">
+          <div>
+            <span className="analytics-eyebrow"><i />LIVE SIMULATION</span>
+            <h2 id="analytics-title">PERFORMANCE ANALYTICS</h2>
+          </div>
+          <button className="analytics-close" type="button" onClick={onClose} aria-label="Close Performance Analytics"><X size={19} /></button>
+        </header>
+        <div className="analytics-metrics" aria-label="Current vehicle metrics">
+          <div><span>ENGINE RPM</span><strong>{telemetry.rpm.toLocaleString()} <small>RPM</small></strong></div>
+          <div><span>EXHAUST TEMPERATURE</span><strong>{Math.round(telemetry.temperatureCelsius)}<small>°C</small></strong></div>
+          <div><span>EXHAUST PRESSURE</span><strong>{telemetry.pressureBar.toFixed(1)} <small>bar</small></strong></div>
+          <div><span>RECOVERED POWER</span><strong>{Math.round(telemetry.recoveredPowerWatts)} <small>W</small></strong></div>
+          <div><span>BATTERY CHARGE</span><strong>{Math.round(telemetry.batteryCharge)}<small>%</small></strong></div>
         </div>
-        <div className="ranges">
-          {ranges.map((item) => (
-            <button className={range === item ? 'active' : ''} key={item} type="button" onClick={() => setRange(item)}>
-              {item}
-            </button>
-          ))}
+        <div className="analytics-controls">
+          <label htmlFor="performance-metric">METRIC</label>
+          <select id="performance-metric" aria-label="Performance metric" value={activeTab} onChange={(event) => setActiveTab(event.target.value as ChartTab)}>
+            {chartTabs.map((tab) => <option key={tab} value={tab}>{t(chartTabLabels[tab])}</option>)}
+          </select>
+          <div className="ranges analytics-ranges" aria-label="Chart time range">
+            {ranges.map((item) => (
+              <button aria-pressed={range === item} aria-label={`Chart range ${item}`} className={range === item ? 'active' : ''} key={item} type="button" onClick={() => setRange(item)}>
+                {item}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
-      <div className="chart-wrap">
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={chartData} margin={{ top: 8, right: 14, bottom: 0, left: 0 }}>
-            <defs>
-              <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="var(--green)" stopOpacity={0.42} />
-                <stop offset="90%" stopColor="var(--green)" stopOpacity={0.02} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid stroke="var(--grid-line)" vertical horizontal />
-            <XAxis dataKey="time" stroke="var(--muted)" tickLine={false} axisLine={false} tickMargin={8} />
-            <YAxis
-              stroke="var(--muted)"
-              tickLine={false}
-              axisLine={false}
-              domain={yAxisConfig.domain as [number, number]}
-              ticks={yAxisConfig.ticks}
-              tickFormatter={yAxisConfig.fmt}
-            />
-            <Tooltip content={<ChartTooltip unit={unit} />} cursor={{ stroke: 'var(--green)', strokeDasharray: '3 4' }} />
-            <Area type="monotone" dataKey="value" stroke="var(--green)" strokeWidth={3} fill={`url(#${gradientId})`} dot={false} />
-          </AreaChart>
-        </ResponsiveContainer>
-        <div className="fixed-tooltip">
-          <strong>{fixedLabel}</strong>
-          <span>{fixedSub}</span>
+        <div className="analytics-chart-heading"><strong>{activeTab === 'batteryCharge' ? 'BATTERY CHARGE' : t(chartTabLabels[activeTab])}</strong><span>{fixedLabel}</span></div>
+        <div className="analytics-chart-wrap">
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={chartData} margin={{ top: 8, right: 14, bottom: 0, left: 0 }}>
+              <defs>
+                <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="var(--green)" stopOpacity={0.42} />
+                  <stop offset="90%" stopColor="var(--green)" stopOpacity={0.02} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid stroke="var(--grid-line)" vertical horizontal />
+              <XAxis dataKey="time" stroke="var(--muted)" tickLine={false} axisLine={false} tickMargin={8} />
+              <YAxis stroke="var(--muted)" tickLine={false} axisLine={false} domain={yAxisConfig.domain as [number, number]} ticks={yAxisConfig.ticks} tickFormatter={yAxisConfig.fmt} />
+              <Tooltip content={<ChartTooltip unit={unit} />} cursor={{ stroke: 'var(--green)', strokeDasharray: '3 4' }} />
+              <Area type="monotone" dataKey="value" stroke="var(--green-bright)" strokeWidth={3} fill={`url(#${gradientId})`} dot={false} activeDot={{ r: 4, fill: 'var(--green-bright)' }} />
+            </AreaChart>
+          </ResponsiveContainer>
         </div>
-      </div>
-    </article>
+      </section>
+    </div>
   )
 }
 
-function ChartTooltip({ active, payload, unit }: { active?: boolean; payload?: Array<{ value: number }>; unit: string }) {
+function ChartTooltip({ active, payload, unit }: { active?: boolean; payload?: Array<{ value: number; payload?: { time?: string } }>; unit: string }) {
   if (!active || !payload?.length) {
     return null
   }
   const val = payload[0].value
-  const text = unit === 'W' ? `${val} W` : unit === 'RPM' ? `${val.toLocaleString()} RPM` : unit === '°C' ? `${val}°C` : `${val} bar`
+  const text = unit === '%' ? `${Math.round(val)}%` : unit === 'W' ? `${val} W` : unit === 'RPM' ? `${val.toLocaleString()} RPM` : unit === '°C' ? `${val}°C` : `${val} bar`
   return (
     <div className="chart-tooltip">
       <strong>{text}</strong>
+      {payload[0].payload?.time && <small>{payload[0].payload.time}</small>}
     </div>
   )
 }

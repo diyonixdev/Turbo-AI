@@ -75,6 +75,47 @@ describe('App dashboard', () => {
     expect(screen.getByText(/battery charge/i)).toBeInTheDocument()
   })
 
+  it('opens the existing live analytics chart only in Graph Mode and supports every close path', async () => {
+    const user = userEvent.setup()
+    renderApp()
+
+    const graphButton = screen.getByRole('button', { name: 'Performance Analytics' })
+    const header = document.querySelector('.topbar')
+    expect(header).toContainElement(graphButton)
+    expect(screen.queryByRole('dialog', { name: 'PERFORMANCE ANALYTICS' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('combobox', { name: 'Performance metric' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Chart range 1M' })).not.toBeInTheDocument()
+
+    await user.click(graphButton)
+    let dialog = screen.getByRole('dialog', { name: 'PERFORMANCE ANALYTICS' })
+    expect(within(dialog).getByText('LIVE SIMULATION')).toBeInTheDocument()
+    for (const metric of ['ENGINE RPM', 'EXHAUST TEMPERATURE', 'EXHAUST PRESSURE', 'RECOVERED POWER', 'BATTERY CHARGE']) {
+      expect(within(dialog).getAllByText(metric).length).toBeGreaterThan(0)
+    }
+
+    const metricSelect = within(dialog).getByRole('combobox', { name: 'Performance metric' })
+    await user.selectOptions(metricSelect, 'batteryCharge')
+    expect(metricSelect).toHaveValue('batteryCharge')
+
+    const fiveMinuteRange = within(dialog).getByRole('button', { name: 'Chart range 5M' })
+    await user.click(fiveMinuteRange)
+    expect(fiveMinuteRange).toHaveAttribute('aria-pressed', 'true')
+    expect(within(dialog).getByRole('button', { name: 'Chart range 1M' })).toHaveAttribute('aria-pressed', 'false')
+
+    await user.click(within(dialog).getByRole('button', { name: 'Close Performance Analytics' }))
+    expect(screen.queryByRole('dialog', { name: 'PERFORMANCE ANALYTICS' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('combobox', { name: 'Performance metric' })).not.toBeInTheDocument()
+
+    await user.click(graphButton)
+    await user.click(screen.getByRole('presentation'))
+    expect(screen.queryByRole('dialog', { name: 'PERFORMANCE ANALYTICS' })).not.toBeInTheDocument()
+
+    await user.click(graphButton)
+    dialog = screen.getByRole('dialog', { name: 'PERFORMANCE ANALYTICS' })
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog', { name: 'PERFORMANCE ANALYTICS' })).not.toBeInTheDocument()
+  })
+
   it('explores all eight energy recovery stages and supports previous, next and close', async () => {
     const user = userEvent.setup()
     renderApp()
