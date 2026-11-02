@@ -641,47 +641,6 @@
   height: 100%;
 }
 
-.stage-label {
-  position: absolute;
-  top: 15px;
-  z-index: 2;
-  color: var(--text);
-  font-size: clamp(12px, 0.86vw, 15px);
-  line-height: 1.18;
-  font-weight: 900;
-  text-align: center;
-  text-shadow: 0 0 8px var(--bg);
-}
-
-.stage-label::after {
-  content: '';
-  display: block;
-  width: 1px;
-  height: 25px;
-  margin: 7px auto 0;
-  background: var(--green);
-  box-shadow: 0 0 8px var(--green);
-}
-
-.label-exhaust {
-  left: 14%;
-}
-
-.label-module {
-  left: 35%;
-  color: var(--cyan);
-}
-
-.label-electric {
-  left: 57%;
-  color: var(--cyan);
-}
-
-.label-battery {
-  right: 11%;
-  color: var(--cyan);
-}
-
 .heat,
 .electric {
   fill: none;
@@ -731,15 +690,24 @@
   stroke-dasharray: 7 7;
 }
 
-.stage-hotspots { position: absolute; z-index: 3; inset: 2px 0 auto; height: 68px; display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); }
-.stage-hotspot { position: relative; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 2px; padding: 2px 3px 0; border: 0; border-radius: 0; background: transparent; color: var(--text); text-align: center; cursor: pointer; text-shadow: 0 0 7px var(--bg), 0 1px 3px var(--bg); }
-.stage-hotspot span { color: var(--green); font-size: 10px; line-height: 1; font-weight: 900; letter-spacing: .7px; }
-.stage-hotspot strong { max-width: 100%; color: var(--text); font-size: clamp(9px, .65vw, 12px); line-height: 1.08; font-weight: 900; text-wrap: balance; }
-.stage-hotspot.thermal span { color: var(--amber); }
-.stage-hotspot.mechanical span { color: #ffe18a; }
-.stage-hotspot.electrical span { color: var(--cyan); }
+.stage-hotspots { position: absolute; z-index: 3; inset: 2px 0 auto; height: 76px; }
+.stage-hotspot { position: absolute; top: 0; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 3px; padding: 2px 3px 0; border: 0; border-radius: 0; background: transparent; color: var(--text); text-align: center; cursor: pointer; text-shadow: 0 0 7px var(--bg), 0 1px 3px var(--bg); }
+.stage-hotspot:nth-of-type(1) { left: var(--callout-exhaust-x, 9%); width: 20%; transform: translateX(-50%); }
+.stage-hotspot:nth-of-type(2) { left: var(--callout-module-x, 54%); width: 34%; transform: translateX(-50%); }
+.stage-hotspot:nth-of-type(3) { left: var(--callout-battery-x, 89%); width: 22%; transform: translateX(-50%); }
+.stage-hotspot span { color: var(--green-bright); font-size: 12px; line-height: 1; font-weight: 900; letter-spacing: .8px; }
+.stage-hotspot strong { max-width: 100%; color: var(--text); font-size: clamp(10px, .78vw, 14px); line-height: 1.12; font-weight: 900; text-wrap: balance; }
+.stage-hotspot.thermal span { color: var(--green-bright); }
+.stage-hotspot.mechanical span { color: var(--cyan); }
 .stage-hotspot.stored span { color: var(--green); }
-.stage-hotspot::after { content: ''; display: block; width: 1px; height: 12px; margin-top: 1px; background: var(--green); box-shadow: 0 0 7px var(--green); opacity: .8; }
+.stage-hotspot::after { content: none; }
+.stage-connector { position: absolute; z-index: 1; top: 50px; width: 2px; height: calc(var(--callout-y, 92px) - 52px); transform: translateX(-50%); border-radius: 2px; background: linear-gradient(180deg, rgba(0, 255, 163, .72), #00ffa3); box-shadow: 0 0 5px rgba(0, 255, 163, .72), 0 0 9px rgba(36, 217, 242, .35); pointer-events: none; }
+.stage-connector.exhaust { left: var(--callout-exhaust-x, 9%); --callout-y: var(--callout-exhaust-y, 92px); }
+.stage-connector.module { left: var(--callout-module-x, 54%); --callout-y: var(--callout-module-y, 108px); }
+.stage-connector.battery { left: var(--callout-battery-x, 89%); --callout-y: var(--callout-battery-y, 92px); }
+.stage-connector::after { content: ''; position: absolute; left: 50%; bottom: -3px; width: 7px; height: 7px; transform: translateX(-50%); border: 1px solid #b7ffe5; border-radius: 50%; background: #00ffa3; box-shadow: 0 0 6px #00ffa3, 0 0 11px rgba(36, 217, 242, .8); }
+.stage-connector::before { content: ''; position: absolute; z-index: 1; left: 50%; top: 0; width: 4px; height: 4px; transform: translateX(-50%); border-radius: 50%; background: #d9fff3; box-shadow: 0 0 7px #00ffa3; opacity: .8; animation: connectorPulse 2.6s ease-in-out infinite; }
+@keyframes connectorPulse { 0% { top: 0; opacity: .15; } 25% { opacity: .9; } 100% { top: 100%; opacity: .15; } }
 .stage-hotspot:hover strong, .stage-hotspot:focus-visible strong, .stage-hotspot.active strong { color: #fff; text-shadow: 0 0 9px var(--green), 0 1px 3px var(--bg); }
 .stage-hotspot:focus-visible { outline: 1px solid var(--green); outline-offset: -2px; }
 .svg-stage-hit { fill: transparent; stroke: transparent; cursor: pointer; pointer-events: all; }
