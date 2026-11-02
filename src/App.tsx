@@ -1,12 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
-  Battery,
   BatteryCharging,
   Bot,
   Car,
   ChartNoAxesCombined,
-  Clock3,
   Cog,
   Leaf,
   Mic,
@@ -40,6 +38,8 @@ import { LanguageProvider, useLanguage } from './i18n/LanguageContext'
 import { formatHeaderDate, formatHeaderTime } from './i18n/translations'
 import type { Language, TranslationKey } from './i18n/translations'
 import { TelemetryProvider, useTelemetry } from './telemetry/useTelemetry'
+import { useLiveMeter, useTweenedText } from './telemetry/useLiveMeter'
+import type { MeterTrend } from './telemetry/useLiveMeter'
 
 import { useVoiceAssistant } from './telemetry/useVoiceAssistant'
 import { useAssistantChat } from './telemetry/useAssistantChat'
@@ -304,189 +304,129 @@ function IconButton({
 
 /* ================= Left Telemetry ================= */
 
+type MeterZone = 'normal' | 'warning' | 'critical'
+
+/** Zone thresholds: [warning starts, critical starts]; battery is reversed (low is bad). */
+function zoneFor(value: number, [warning, critical]: [number, number], reversed = false): MeterZone {
+  if (reversed) return value <= critical ? 'critical' : value <= warning ? 'warning' : 'normal'
+  return value >= critical ? 'critical' : value >= warning ? 'warning' : 'normal'
+}
+
 function LeftTelemetry() {
   const { t } = useLanguage()
-  const { telemetry } = useTelemetry()
-  const { batteryCharge, chargingEtaMinutes, rpm, temperatureCelsius, pressureBar } = telemetry
+  const { telemetry, isPaused } = useTelemetry()
+  const [battery, batteryTrend] = useLiveMeter(telemetry.batteryCharge, { jitter: 0.2, min: 0, max: 100, paused: isPaused })
+  const [rpm, rpmTrend] = useLiveMeter(telemetry.rpm, { jitter: 90, min: 0, max: 6000, paused: isPaused })
+  const [temperature, temperatureTrend] = useLiveMeter(telemetry.temperatureCelsius, { jitter: 3, min: 0, max: 350, paused: isPaused })
+  const [pressure, pressureTrend] = useLiveMeter(telemetry.pressureBar, { jitter: 0.05, min: 0, max: 3, paused: isPaused })
 
   return (
     <aside className="left-column">
-      <TelemetryPanel
-        icon={<BatteryCharging size={24} />}
+      <MeterCard
+        icon={<BatteryCharging size={22} />}
         title={t('telemetry.battery')}
-        badge={batteryCharge >= 100 ? t('telemetry.normal') : t('telemetry.charging')}
         tone="green"
-        gauge={<CircularGauge value={Math.round(batteryCharge)} tone="green" label={`${Math.round(batteryCharge)}%`} />}
-      >
-        <div className="battery-detail">
-          <span>{t('telemetry.estTimeRemaining')}</span>
-          <strong>{chargingEtaMinutes} min</strong>
-          <div className="bar">
-            <i style={{ width: `${Math.min(100, Math.max(0, batteryCharge))}%` }} />
-          </div>
-          <Sparkline tone="cyan" />
-        </div>
-      </TelemetryPanel>
-
-      <TelemetryPanel
-        icon={<Cog size={25} />}
+        value={battery}
+        decimals={0}
+        unit="%"
+        max={100}
+        scale={['0', '100']}
+        zone={zoneFor(battery, [50, 20], true)}
+        trend={batteryTrend}
+      />
+      <MeterCard
+        icon={<Cog size={22} />}
         title={t('telemetry.engineRpm')}
-        badge={rpm < 3000 ? t('telemetry.normal') : 'HIGH'}
         tone="green"
-        gauge={<ArcGauge value={String(Math.round(rpm))} unit="RPM" tone="rpm" rpmValue={rpm} />}
-      >
-        <SparkBlock tone="green" />
-      </TelemetryPanel>
-
-      <TelemetryPanel
-        icon={<Thermometer size={25} />}
+        value={rpm}
+        decimals={0}
+        unit="RPM"
+        max={6000}
+        scale={['0', '6K']}
+        zone={zoneFor(rpm, [3000, 4500])}
+        trend={rpmTrend}
+      />
+      <MeterCard
+        icon={<Thermometer size={22} />}
         title={t('telemetry.exhaustTemperature')}
-        badge={temperatureCelsius > 220 ? t('telemetry.high') : t('telemetry.normal')}
         tone="amber"
-        gauge={<ArcGauge value={String(Math.round(temperatureCelsius))} unit="°C" tone="hot" tempValue={temperatureCelsius} />}
-      >
-        <SparkBlock tone="red" />
-      </TelemetryPanel>
-
-      <TelemetryPanel
-        icon={<Activity size={25} />}
+        value={temperature}
+        decimals={0}
+        unit="°C"
+        max={350}
+        scale={['0', '350']}
+        zone={zoneFor(temperature, [220, 280])}
+        trend={temperatureTrend}
+      />
+      <MeterCard
+        icon={<Activity size={22} />}
         title={t('telemetry.exhaustPressure')}
-        badge={pressureBar > 2.2 ? t('telemetry.high') : t('telemetry.normal')}
         tone="cyan"
-        gauge={<ArcGauge value={String(Math.round(pressureBar * 10) / 10)} unit="bar" tone="pressure" />}>
-        <SparkBlock tone="cyan" />
-      </TelemetryPanel>
+        value={pressure}
+        decimals={1}
+        unit="bar"
+        max={3}
+        scale={['0', '3']}
+        zone={zoneFor(pressure, [2.2, 2.6])}
+        trend={pressureTrend}
+      />
     </aside>
   )
 }
 
-function TelemetryPanel({
+function MeterCard({
   icon,
   title,
-  badge,
   tone,
-  gauge,
-  children,
+  value,
+  decimals,
+  unit,
+  max,
+  scale,
+  zone,
+  trend,
 }: {
   icon: React.ReactNode
   title: string
-  badge: string
   tone: 'green' | 'amber' | 'cyan'
-  gauge: React.ReactNode
-  children: React.ReactNode
+  value: number
+  decimals: number
+  unit: string
+  max: number
+  scale: [string, string]
+  zone: MeterZone
+  trend: MeterTrend
 }) {
-  const { t } = useLanguage()
+  const pct = Math.min(1, Math.max(0, value / max))
+  const valueRef = useTweenedText<HTMLElement>(value, decimals)
   return (
     <article className={`panel telemetry telemetry-${tone}`}>
-      <div className="panel-heading">
-        <div className="heading-title">
-          {icon}
+      <div className={`meter-card tone-${tone} zone-${zone} trend-${trend}`}>
+        <div className="meter-title">
+          <span className="meter-icon">{icon}</span>
           <h2>{title}</h2>
         </div>
-        <span className="badge">{badge}</span>
-      </div>
-      <div className="telemetry-body">
-        {gauge}
-        <div className="telemetry-side">
-          {children}
-          <small>{t('telemetry.simulatedData')}</small>
+        <div className="meter-body">
+          <div className="meter-gauge" role="meter" aria-label={title} aria-valuemin={0} aria-valuemax={max} aria-valuenow={Number(value.toFixed(decimals))}>
+            <svg viewBox="0 6 200 102" aria-hidden="true">
+              <path className="meter-track" d="M20 100 A80 80 0 0 1 180 100" />
+              <path className="meter-fill" d="M20 100 A80 80 0 0 1 180 100" pathLength={100} style={{ strokeDasharray: `${pct * 100} 100` }} />
+              {gaugeTicks.map((tick) => (
+                <line key={tick} className="tick" x1="100" y1="34" x2="100" y2={tick % 4 === 0 ? 44 : 40} transform={`rotate(${-90 + tick * 11.25} 100 100)`} />
+              ))}
+              <line className="meter-needle" x1="100" y1="100" x2="100" y2="38" style={{ transform: `rotate(${-90 + pct * 180}deg)` }} />
+              <circle className="meter-hub" cx="100" cy="100" r="6" />
+            </svg>
+            <span className="meter-scale min">{scale[0]}</span>
+            <span className="meter-scale max">{scale[1]}</span>
+          </div>
+        </div>
+        <div className="meter-value">
+          <strong ref={valueRef} />
+          <span>{unit}</span>
         </div>
       </div>
     </article>
-  )
-}
-
-function CircularGauge({ value, label, tone }: { value: number; label: string; tone: string }) {
-  const circumference = 2 * Math.PI * 45
-  const pct = Math.max(0, Math.min(100, value))
-  return (
-    <div className={`circle-gauge ${tone}`}>
-      <svg viewBox="0 0 120 120" aria-hidden="true">
-        <circle className="track" cx="60" cy="60" r="45" />
-        <circle
-          className="progress"
-          cx="60"
-          cy="60"
-          r="45"
-          strokeDasharray={circumference}
-          strokeDashoffset={circumference * (1 - pct / 100)}
-        />
-      </svg>
-      <strong>{label}</strong>
-    </div>
-  )
-}
-
-function ArcGauge({
-  value,
-  unit,
-  tone,
-  rpmValue,
-  tempValue,
-}: {
-  value: string
-  unit: string
-  tone: 'rpm' | 'hot' | 'pressure'
-  rpmValue?: number
-  tempValue?: number
-}) {
-  const pct = useMemo(() => {
-    if (tone === 'rpm') {
-      return Math.min(1, Math.max(0, (rpmValue ?? 2450) / 6000))
-    }
-    if (tone === 'hot') {
-      return Math.min(1, Math.max(0, (tempValue ?? 185) / 350))
-    }
-    return Math.min(1, Math.max(0, parseFloat(value) / 3.0))
-  }, [tone, rpmValue, tempValue, value])
-
-  const rot = -90 + pct * 180
-  return (
-    <div className={`arc-gauge ${tone}`}>
-      <svg viewBox="0 0 150 96" aria-hidden="true">
-        <path className="arc-track" d="M18 82 A57 57 0 0 1 132 82" />
-        <path className="arc-main" d="M18 82 A57 57 0 0 1 132 82" />
-        {gaugeTicks.map((tick) => (
-          <line
-            key={tick}
-            className="tick"
-            x1="75"
-            y1="24"
-            x2="75"
-            y2="32"
-            transform={`rotate(${-90 + tick * 11.25} 75 82)`}
-          />
-        ))}
-        {tone === 'rpm' && <path className="arc-warn" d="M92 31 A57 57 0 0 1 132 82" />}
-        {tone === 'hot' && <path className="arc-warn" d="M72 25 A57 57 0 0 1 132 82" />}
-        <line
-          className="needle"
-          x1="75"
-          y1="82"
-          x2="75"
-          y2="36"
-          transform={`rotate(${rot} 75 82)`}
-        />
-      </svg>
-      <div className="arc-reading">
-        <strong>{value}</strong>
-        <span>{unit}</span>
-      </div>
-      {tone === 'rpm' && (
-        <div className="scale">
-          <span>0</span>
-          <span>8K</span>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function SparkBlock({ tone }: { tone: 'green' | 'cyan' | 'red' }) {
-  return (
-    <div className="spark-block">
-      <Sparkline tone={tone} />
-    </div>
   )
 }
 
@@ -517,27 +457,12 @@ function EnergyRecoveryPanel() {
         </span>
       </div>
       <EnergyFlowArt telemetry={telemetry} />
-      <div className="metric-row">
+      <div className="metric-row single">
         <MetricCard
           icon={<Zap size={35} />}
           label={t('energy.recoveredPower')}
           value={`${telemetry.recoveredPowerWatts} W`}
           tone="amber"
-          spark
-        />
-        <MetricCard
-          icon={<Battery size={35} />}
-          label={t('energy.batteryCharge')}
-          value={`${Math.round(telemetry.batteryCharge)}%`}
-          tone="green"
-          progress
-          progressValue={Math.round(telemetry.batteryCharge)}
-        />
-        <MetricCard
-          icon={<Clock3 size={35} />}
-          label={t('energy.chargingEta')}
-          value={`${telemetry.chargingEtaMinutes} min`}
-          tone="cyan"
           spark
         />
       </div>

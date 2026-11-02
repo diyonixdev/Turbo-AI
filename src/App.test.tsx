@@ -72,7 +72,7 @@ describe('App dashboard', () => {
     renderApp()
     expect(screen.getByText(/TURBO AI/)).toBeInTheDocument()
     expect(assistantPanel()).toBeInTheDocument()
-    expect(screen.getByText(/battery charge/i)).toBeInTheDocument()
+    expect(screen.getByText(/recovered power/i)).toBeInTheDocument()
   })
 
   it('opens the existing live analytics chart only in Graph Mode and supports every close path', async () => {
