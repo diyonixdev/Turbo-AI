@@ -1,5 +1,5 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 
@@ -73,6 +73,57 @@ describe('App dashboard', () => {
     expect(screen.getByText(/TURBO AI/)).toBeInTheDocument()
     expect(assistantPanel()).toBeInTheDocument()
     expect(screen.getByText(/battery charge/i)).toBeInTheDocument()
+  })
+
+  it('explores all eight energy recovery stages and supports previous, next and close', async () => {
+    const user = userEvent.setup()
+    renderApp()
+
+    const stages = [
+      'EXHAUST GAS OUTLET',
+      'HEAT EXCHANGER',
+      'WASTE HEAT RECOVERY MODULE',
+      'TURBINE',
+      'MECHANICAL DRIVE SHAFT',
+      'ELECTRIC GENERATOR',
+      'POWER MANAGEMENT UNIT',
+      'BATTERY STORAGE SYSTEM',
+    ]
+    for (let index = 0; index < stages.length; index += 1) {
+      expect(screen.getByRole('button', { name: `Component ${String(index + 1).padStart(2, '0')}: ${stages[index]}` })).toBeInTheDocument()
+    }
+
+    const pipeline = screen.getByRole('group', { name: 'Connected exhaust heat recovery pipeline' })
+    expect(pipeline).toHaveAttribute('viewBox', '0 0 820 310')
+    expect(pipeline.querySelector('.heat-one')).toBeInTheDocument()
+    expect(pipeline.querySelector('.electric')).toBeInTheDocument()
+    expect(pipeline.querySelector('.engine')).toBeInTheDocument()
+    expect(pipeline.querySelector('.module')).toBeInTheDocument()
+    expect(pipeline.querySelector('.battery-art')).toBeInTheDocument()
+
+    for (let index = 0; index < stages.length; index += 1) {
+      await user.click(screen.getByRole('button', { name: `Component ${String(index + 1).padStart(2, '0')}: ${stages[index]}` }))
+      const stageDialog = screen.getByRole('dialog')
+      expect(within(stageDialog).getByRole('heading', { name: stages[index] })).toBeInTheDocument()
+      const closeButton = within(stageDialog).getByRole('button', { name: /close information panel/i })
+      expect(closeButton.querySelector('svg')).toHaveAttribute('width', '19')
+      expect(closeButton.querySelector('svg')).toHaveAttribute('height', '19')
+      await user.click(closeButton)
+    }
+
+    await user.click(screen.getByRole('button', { name: 'Component 04: TURBINE' }))
+    const dialog = screen.getByRole('dialog')
+    expect(pipeline.querySelector('.module')).toHaveClass('selected-part')
+    expect(within(dialog).getByRole('heading', { name: 'TURBINE' })).toBeInTheDocument()
+    expect(within(dialog).getByText(/Pressurized working fluid or exhaust flow/)).toBeInTheDocument()
+    expect(within(dialog).getAllByText('COMPONENT 04 / 08')).toHaveLength(2)
+
+    await user.click(within(dialog).getByRole('button', { name: /next/i }))
+    expect(within(screen.getByRole('dialog')).getByRole('heading', { name: 'MECHANICAL DRIVE SHAFT' })).toBeInTheDocument()
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: /previous/i }))
+    expect(within(screen.getByRole('dialog')).getByRole('heading', { name: 'TURBINE' })).toBeInTheDocument()
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: /close information panel/i }))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
   it('speaks the greeting exactly once per language', async () => {

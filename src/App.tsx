@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   Activity,
   Battery,
@@ -21,6 +21,9 @@ import {
   VolumeX,
   Volume,
   Zap,
+  ChevronLeft,
+  ChevronRight,
+  X,
 } from 'lucide-react'
 import {
   Area,
@@ -48,6 +51,17 @@ type Theme = 'dark' | 'light'
 const sparkPath = 'M2 30 L14 25 L24 27 L36 18 L48 22 L60 11 L72 24 L84 18 L96 22 L108 16 L120 19 L132 12 L146 18'
 
 const gaugeTicks = Array.from({ length: 17 }, (_, index) => index)
+
+const recoveryStages = [
+  { name: 'EXHAUST GAS OUTLET', label: ['EXHAUST GAS', 'OUTLET'], position: 105, color: 'thermal', description: 'Hot exhaust gases leave the engine and enter the recovery path.', purpose: 'Supplies waste exhaust energy to the system.', principle: 'Exhaust flow carries heat and pressure away from the engine; the outlet routes that stream toward heat recovery.', input: 'Hot exhaust gases from the engine', output: 'Hot exhaust gases entering the recovery system', importance: 'This is the source of the energy that would otherwise leave unused.' },
+  { name: 'HEAT EXCHANGER', label: ['HEAT', 'EXCHANGER'], position: 330, color: 'thermal', description: 'Transfers heat from exhaust gases to a recovery mechanism or working fluid.', purpose: 'Captures thermal energy while allowing exhaust to continue downstream at a lower temperature.', principle: 'Heat moves across a separating surface from the hotter exhaust into the receiving medium.', input: 'Hot exhaust gases', output: 'Transferred thermal energy and cooled exhaust gases', importance: 'Makes exhaust heat available to a conversion process.' },
+  { name: 'WASTE HEAT RECOVERY MODULE', label: ['WASTE HEAT', 'RECOVERY', 'MODULE'], position: 435, color: 'thermal', description: 'The recovery subsystem that makes captured exhaust energy available for conversion.', purpose: 'Collects and routes useful thermal energy into the conversion stage.', principle: 'The module uses the system’s selected recovery architecture; its internal hardware is not specified in this dashboard model.', input: 'Recovered thermal energy', output: 'Usable energy for the conversion stage', importance: 'Bridges heat capture and useful energy conversion.' },
+  { name: 'TURBINE', label: ['TURBINE'], position: 525, color: 'mechanical', description: 'Extracts energy from a suitable pressurized working fluid or exhaust stream.', purpose: 'Converts fluid energy into rotational mechanical energy.', principle: 'Flow transfers energy to turbine blades, causing the rotor to turn.', input: 'Pressurized working fluid or exhaust flow, depending on system architecture', output: 'Rotational mechanical energy', importance: 'Provides the mechanical power used by the generator.' },
+  { name: 'MECHANICAL DRIVE SHAFT', label: ['MECHANICAL', 'DRIVE SHAFT'], position: 625, color: 'mechanical', description: 'Transfers rotation between the turbine and generator.', purpose: 'Carries mechanical power through the conversion path.', principle: 'Torque from the rotating input turns the connected shaft and delivers rotation to the generator.', input: 'Mechanical rotation from the turbine', output: 'Mechanical rotation delivered to the generator', importance: 'Connects the mechanical energy source to electrical generation.' },
+  { name: 'ELECTRIC GENERATOR', label: ['ELECTRIC', 'GENERATOR'], position: 725, color: 'electrical', description: 'Produces electrical power from rotational motion.', purpose: 'Converts mechanical energy into electrical energy.', principle: 'Relative motion between magnetic fields and windings induces electrical current.', input: 'Mechanical rotation', output: 'Generated electrical power', importance: 'Turns recovered mechanical power into electricity the vehicle can use or store.' },
+  { name: 'POWER MANAGEMENT UNIT', label: ['POWER', 'MANAGEMENT', 'UNIT'], position: 825, color: 'electrical', description: 'Controls and conditions generated electrical power before storage or use.', purpose: 'Regulates power delivery to match system and battery requirements.', principle: 'Power electronics monitor and adjust voltage and current to manage a safe, useful output.', input: 'Generated electrical power', output: 'Controlled electrical power', importance: 'Makes generated energy suitable for downstream loads and storage.' },
+  { name: 'BATTERY STORAGE SYSTEM', label: ['BATTERY', 'STORAGE', 'SYSTEM'], position: 925, color: 'stored', description: 'Stores recovered electrical energy for later use.', purpose: 'Adds recovered energy to the vehicle battery.', principle: 'Controlled current drives electrochemical reactions that store energy in the cells.', input: 'Conditioned electrical power', output: 'Stored electrical energy', importance: 'Preserves recovered power for future vehicle use.' },
+] as const
 
 const chartTabs = ['rpm', 'temperature', 'pressure', 'recoveredPower'] as const
 type ChartTab = (typeof chartTabs)[number]
@@ -529,6 +543,10 @@ function EnergyRecoveryPanel() {
 }
 
 function EnergyFlowArt({ telemetry }: { telemetry: import('./telemetry/types').TelemetryData }) {
+  const [selectedStage, setSelectedStage] = useState<number | null>(null)
+  const selected = selectedStage === null ? null : recoveryStages[selectedStage]
+  const selectRelative = (direction: -1 | 1) => setSelectedStage((current) => current === null ? (direction === 1 ? 0 : 7) : (current + direction + 8) % 8)
+  const hitAreas = [[0, 150], [355, 45], [395, 48], [442, 58], [500, 60], [555, 58], [610, 65], [674, 146]] as const
   // Drive visual effects from telemetry using inline styles / CSS variables
   const heatInt = Math.min(1, telemetry.temperatureCelsius / 350)
   const particleSpeed = Math.min(1, telemetry.recoveredPowerWatts / 800)
@@ -547,11 +565,12 @@ function EnergyFlowArt({ telemetry }: { telemetry: import('./telemetry/types').T
         } as React.CSSProperties
       }
     >
-      <FlowStageLabel className="label-exhaust" textKey="energy.exhaustHeat" />
-      <FlowStageLabel className="label-module" textKey="energy.heatRecoveryModule" />
-      <FlowStageLabel className="label-electric" textKey="energy.electricalConversion" />
-      <FlowStageLabel className="label-battery" textKey="energy.batteryCharging" />
-      <svg viewBox="0 0 820 310" aria-hidden="true">
+      <div className="stage-hotspots" aria-label="Energy recovery components">
+        {recoveryStages.map((stage, index) => <button key={stage.name} type="button" className={`stage-hotspot ${stage.color}${selectedStage === index ? ' active' : ''}`} aria-label={`Component ${String(index + 1).padStart(2, '0')}: ${stage.name}`} aria-pressed={selectedStage === index} onClick={() => setSelectedStage(index)} title={stage.name}>
+          <span>{String(index + 1).padStart(2, '0')}</span><strong>{stage.name}</strong>
+        </button>)}
+      </div>
+      <svg viewBox="0 0 820 310" role="group" aria-label="Connected exhaust heat recovery pipeline">
         <defs>
           <linearGradient id="engineMetal" x1="0%" x2="100%">
             <stop offset="0%" stopColor="#182624" />
@@ -576,7 +595,7 @@ function EnergyFlowArt({ telemetry }: { telemetry: import('./telemetry/types').T
           </filter>
         </defs>
 
-        <g className="engine">
+        <g className={`engine${selectedStage === 0 ? ' selected-part' : ''}`}>
           <rect x="18" y="150" width="118" height="58" rx="8" fill="url(#engineMetal)" />
           <rect x="37" y="115" width="78" height="42" rx="8" fill="#0c1715" stroke="#49645f" />
           <path d="M18 182 H0 M45 208 V240 H110 V208 M69 116 V96 H108 V116" stroke="#566b66" strokeWidth="8" fill="none" />
@@ -588,7 +607,7 @@ function EnergyFlowArt({ telemetry }: { telemetry: import('./telemetry/types').T
           </g>
         </g>
 
-        <g className="energy-ribbons" filter="url(#energyGlow)">
+        <g className={`energy-ribbons${selectedStage !== null && selectedStage >= 4 && selectedStage <= 6 ? ' selected-part' : ''}`} filter="url(#energyGlow)">
           <path className="heat heat-one" d="M112 155 C175 101, 245 133, 304 156 C343 171, 377 174, 410 162" />
           <path className="heat heat-two" d="M116 178 C184 142, 248 156, 312 177 C347 188, 382 188, 415 177" />
           <path className="heat heat-three" d="M118 201 C185 189, 255 195, 321 201 C360 205, 387 202, 416 193" />
@@ -608,7 +627,7 @@ function EnergyFlowArt({ telemetry }: { telemetry: import('./telemetry/types').T
           ))}
         </g>
 
-        <g className="module">
+        <g className={`module${selectedStage !== null && selectedStage >= 1 && selectedStage <= 3 ? ' selected-part' : ''}`}>
           <ellipse cx="445" cy="176" rx="61" ry="69" fill="#081411" stroke="#4b6b62" strokeWidth="4" />
           <rect x="386" y="112" width="116" height="126" rx="22" fill="url(#engineMetal)" stroke="#1c6c5a" strokeWidth="4" />
           <rect x="404" y="126" width="78" height="98" rx="13" fill="#12211e" stroke="#758b82" />
@@ -621,7 +640,7 @@ function EnergyFlowArt({ telemetry }: { telemetry: import('./telemetry/types').T
           <path d="M505 175 H560" stroke="#24d9f2" strokeWidth="8" />
         </g>
 
-        <g className="battery-art">
+        <g className={`battery-art${selectedStage === 7 ? ' selected-part' : ''}`}>
           <rect x="676" y="113" width="112" height="126" rx="14" fill="#0a1b18" stroke="#2effa7" strokeWidth="4" />
           <rect x="704" y="96" width="56" height="18" rx="5" fill="#0a1b18" stroke="#2effa7" strokeWidth="4" />
           <rect x="696" y="134" width="18" height="84" rx="4" />
@@ -636,22 +655,18 @@ function EnergyFlowArt({ telemetry }: { telemetry: import('./telemetry/types').T
           <path d="M590 78 V112" />
           <path d="M733 78 V106" />
         </g>
+        <g className="stage-hitboxes">
+          {recoveryStages.map((stage, index) => <rect key={stage.name} x={hitAreas[index][0]} y="86" width={hitAreas[index][1]} height="166" className={`svg-stage-hit${selectedStage === index ? ' active' : ''}`} aria-hidden="true" onClick={() => setSelectedStage(index)} />)}
+        </g>
       </svg>
-    </div>
-  )
-}
-
-function FlowStageLabel({ className, textKey }: { className: string; textKey: TranslationKey }) {
-  const { t } = useLanguage()
-  const lines = t(textKey).split('\n')
-  return (
-    <div className={`stage-label ${className}`}>
-      {lines.map((line, index) => (
-        <Fragment key={index}>
-          {index > 0 && <br />}
-          {line}
-        </Fragment>
-      ))}
+      {selected && selectedStage !== null && <div className="stage-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSelectedStage(null) }}>
+        <section className="stage-dialog" role="dialog" aria-modal="true" aria-labelledby="stage-dialog-title">
+          <header className="stage-dialog-header"><div className={`stage-dialog-icon ${selected.color}`}>{String(selectedStage + 1).padStart(2, '0')}</div><div><span>COMPONENT {String(selectedStage + 1).padStart(2, '0')} / 08</span><h3 id="stage-dialog-title">{selected.name}</h3></div><button type="button" aria-label="Close information panel" className="stage-close" onClick={() => setSelectedStage(null)}><X size={19} /></button></header>
+          <p className="stage-description">{selected.description}</p><div className="stage-facts">
+            <div><span>MAIN PURPOSE</span><p>{selected.purpose}</p></div><div><span>WORKING PRINCIPLE</span><p>{selected.principle}</p></div><div><span>INPUT</span><p>{selected.input}</p></div><div><span>OUTPUT</span><p>{selected.output}</p></div><div className="stage-importance"><span>WHY IT MATTERS</span><p>{selected.importance}</p></div>
+          </div><footer className="stage-dialog-footer"><button type="button" onClick={() => selectRelative(-1)}><ChevronLeft size={17} />Previous</button><span>COMPONENT {String(selectedStage + 1).padStart(2, '0')} / 08</span><button type="button" onClick={() => selectRelative(1)}>Next<ChevronRight size={17} /></button></footer>
+        </section>
+      </div>}
     </div>
   )
 }
