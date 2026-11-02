@@ -106,6 +106,31 @@ describe('sendChat', () => {
     })
   })
 
+  it('reports network (backend unreachable) for a bare proxy 502 with no JSON body', async () => {
+    // What the Vite dev proxy returns when the Express backend is not running
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 502,
+        json: async () => {
+          throw new Error('empty body')
+        },
+      })
+    )
+
+    await expect(sendChat(baseOptions({ timeoutMs: 5000 }))).rejects.toMatchObject({ code: 'network' })
+  })
+
+  it('keeps the backend error code when a 502 carries a JSON body', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(jsonResponse(502, { error: { code: 'upstream', message: 'Gemini request failed.' } }))
+    )
+
+    await expect(sendChat(baseOptions({ timeoutMs: 5000 }))).rejects.toMatchObject({ code: 'upstream' })
+  })
+
   it('maps server error codes from the JSON body', async () => {
     vi.stubGlobal(
       'fetch',

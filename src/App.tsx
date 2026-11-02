@@ -4,9 +4,10 @@ import {
   BatteryCharging,
   Bot,
   Car,
-  ChartNoAxesCombined,
   Cog,
+  Gauge,
   Leaf,
+  Wrench,
   Mic,
   Moon,
   Pause,
@@ -40,6 +41,7 @@ import type { Language, TranslationKey } from './i18n/translations'
 import { TelemetryProvider, useTelemetry } from './telemetry/useTelemetry'
 import { useLiveMeter, useTweenedText } from './telemetry/useLiveMeter'
 import type { MeterTrend } from './telemetry/useLiveMeter'
+import { SPEED_MAX, SPEED_MIN, useSimulatedSpeed } from './telemetry/useSimulatedSpeed'
 
 import { useVoiceAssistant } from './telemetry/useVoiceAssistant'
 import { useAssistantChat } from './telemetry/useAssistantChat'
@@ -111,6 +113,7 @@ function Dashboard() {
   const [isMute, setIsMute] = useState<boolean>(() => localStorage.getItem('thermos-mute') === 'true')
   const [driverModeOpen, setDriverModeOpen] = useState(false)
   const [isGraphOpen, setIsGraphOpen] = useState(false)
+  const [isEcoOpen, setIsEcoOpen] = useState(false)
 
   useEffect(() => {
     localStorage.setItem('thermos-theme', theme)
@@ -126,7 +129,7 @@ function Dashboard() {
 
   return (
     <main className="dashboard" data-theme={theme} data-lang={language}>
-      <TopStatusBar theme={theme} onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')} volume={effectiveVolume} setVolume={setVolume} isMute={isMute} setIsMute={setIsMute} onOpenDriver={() => setDriverModeOpen(true)} onOpenGraph={() => setIsGraphOpen(true)} />
+      <TopStatusBar theme={theme} onToggleTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')} volume={effectiveVolume} setVolume={setVolume} isMute={isMute} setIsMute={setIsMute} onOpenDriver={() => setDriverModeOpen(true)} onOpenEco={() => setIsEcoOpen(true)} />
       <section className="dashboard-grid">
         <LeftTelemetry />
         <section className="center-stack">
@@ -136,6 +139,7 @@ function Dashboard() {
       </section>
       <DiagnosticFooter />
       {isGraphOpen && <TelemetryChart onClose={() => setIsGraphOpen(false)} />}
+      {isEcoOpen && <EcoModePanel onClose={() => setIsEcoOpen(false)} />}
       {driverModeOpen && (
         <DriverModePanel onClose={() => setDriverModeOpen(false)} volume={effectiveVolume} />
       )}
@@ -145,7 +149,7 @@ function Dashboard() {
 
 /* ================= Top Status Bar ================= */
 
-function TopStatusBar({ theme, onToggleTheme, volume, setVolume, isMute, setIsMute, onOpenDriver, onOpenGraph }: { theme: Theme; onToggleTheme: () => void; volume: number; setVolume: (v: number) => void; isMute: boolean; setIsMute: (m: boolean) => void; onOpenDriver: () => void; onOpenGraph: () => void }) {
+function TopStatusBar({ theme, onToggleTheme, volume, setVolume, isMute, setIsMute, onOpenDriver, onOpenEco }: { theme: Theme; onToggleTheme: () => void; volume: number; setVolume: (v: number) => void; isMute: boolean; setIsMute: (m: boolean) => void; onOpenDriver: () => void; onOpenEco: () => void }) {
   const { language, setLanguage, t } = useLanguage()
   const [now, setNow] = useState(() => new Date())
   const [volumeOpen, setVolumeOpen] = useState(false)
@@ -209,9 +213,12 @@ function TopStatusBar({ theme, onToggleTheme, volume, setVolume, isMute, setIsMu
         </div>
       </div>
 
-      <button className="graph-mode-button" type="button" onClick={onOpenGraph} aria-label="Performance Analytics" title="Performance Analytics">
-        <ChartNoAxesCombined size={21} aria-hidden="true" />
-        <i aria-hidden="true" />
+      <button className="eco-button" type="button" onClick={onOpenEco} aria-label="ECO Mode" title="ECO Mode">
+        <span className="eco-icon" aria-hidden="true">
+          <Gauge size={22} />
+          <Leaf className="eco-leaf" size={12} />
+        </span>
+        ECO
       </button>
 
       <div className="topbar-actions">
@@ -665,6 +672,262 @@ export function MetricCard({
 }
 
 /* ================= Telemetry Chart ================= */
+
+/* ================= ECO Mode ================= */
+
+type SpeedZone = 'low' | 'eco' | 'high'
+
+// rate = how fast the maintenance clock runs in this zone, relative to real time
+const speedZones: { zone: SpeedZone; label: string; range: string; from: number; to: number; preset: number; rate: number }[] = [
+  { zone: 'low', label: 'LOW', range: '30–59 km/h', from: 30, to: 60, preset: 45, rate: 0.5 },
+  { zone: 'eco', label: 'ECO', range: '60–100 km/h', from: 60, to: 100, preset: 80, rate: 1 },
+  { zone: 'high', label: 'HIGH', range: '101–180 km/h', from: 100, to: 180, preset: 150, rate: 2 },
+]
+const zoneRate = (zone: SpeedZone) => speedZones.find((z) => z.zone === zone)?.rate ?? 1
+const formatRate = (rate: number) => `${rate === 0.5 ? '½' : rate}×`
+
+function speedZoneFor(speed: number): SpeedZone {
+  const s = Math.round(speed)
+  return s < 60 ? 'low' : s <= 100 ? 'eco' : 'high'
+}
+
+// Dial geometry: 270° sweep from -135° (30 km/h) to +135° (180 km/h), angles clockwise from 12 o'clock
+const DIAL_CX = 150
+const DIAL_CY = 150
+const dialAngle = (speed: number) => -135 + ((speed - SPEED_MIN) / (SPEED_MAX - SPEED_MIN)) * 270
+const dialPoint = (angle: number, r: number) => {
+  const rad = (angle * Math.PI) / 180
+  return [DIAL_CX + r * Math.sin(rad), DIAL_CY - r * Math.cos(rad)] as const
+}
+const dialArc = (from: number, to: number, r: number) => {
+  const [x0, y0] = dialPoint(dialAngle(from), r)
+  const [x1, y1] = dialPoint(dialAngle(to), r)
+  const large = dialAngle(to) - dialAngle(from) > 180 ? 1 : 0
+  return `M${x0.toFixed(2)} ${y0.toFixed(2)} A${r} ${r} 0 ${large} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`
+}
+const speedTicks = Array.from({ length: (SPEED_MAX - SPEED_MIN) / 10 + 1 }, (_, i) => SPEED_MIN + i * 10)
+
+// Service interval: 3500 hours of service time, shown as days. Service time advances at the
+// speed zone's rate (½× below 60 km/h, 1× at 60–100, 2× above 100). Progress is saved in the
+// browser with a timestamp; time that passes while ECO mode is closed counts at 1×.
+const SERVICE_INTERVAL_HOURS = 3500
+const HOUR_MS = 60 * 60 * 1000
+const DAY_MS = 24 * HOUR_MS
+const SERVICE_INTERVAL_MS = SERVICE_INTERVAL_HOURS * HOUR_MS
+const SERVICE_CLOCK_KEY = 'thermos-service-clock'
+const SERVICE_TICK_MS = 250
+
+function loadServiceElapsed(): number {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SERVICE_CLOCK_KEY) ?? 'null') as { elapsed?: number; savedAt?: number } | null
+    if (saved && Number.isFinite(saved.elapsed) && Number.isFinite(saved.savedAt)) {
+      const away = Math.max(0, Date.now() - (saved.savedAt as number))
+      return Math.min(SERVICE_INTERVAL_MS, Math.max(0, (saved.elapsed as number) + away))
+    }
+  } catch {
+    // Storage unavailable or corrupt: start a fresh interval
+  }
+  return 0
+}
+
+function saveServiceElapsed(elapsed: number) {
+  try {
+    localStorage.setItem(SERVICE_CLOCK_KEY, JSON.stringify({ elapsed, savedAt: Date.now() }))
+  } catch {
+    // Storage unavailable: the clock still runs for this session
+  }
+}
+
+/** Service time used so far (ms), advancing at `rate` × real time, plus when it was last updated. */
+function useServiceClock(rate: number): { elapsed: number; at: number } {
+  const [clock, setClock] = useState(() => ({ elapsed: loadServiceElapsed(), at: Date.now() }))
+  const elapsedRef = useRef(clock.elapsed)
+  const rateRef = useRef(rate)
+
+  useEffect(() => {
+    rateRef.current = rate
+  }, [rate])
+
+  useEffect(() => {
+    let last = Date.now()
+    const id = setInterval(() => {
+      const now = Date.now()
+      elapsedRef.current = Math.min(SERVICE_INTERVAL_MS, elapsedRef.current + (now - last) * rateRef.current)
+      last = now
+      setClock({ elapsed: elapsedRef.current, at: now })
+      saveServiceElapsed(elapsedRef.current)
+    }, SERVICE_TICK_MS)
+    return () => clearInterval(id)
+  }, [])
+
+  return clock
+}
+
+function Speedometer({ speed }: { speed: number }) {
+  const zone = speedZoneFor(speed)
+  const pct = (speed - SPEED_MIN) / (SPEED_MAX - SPEED_MIN)
+  const valueRef = useTweenedText<HTMLElement>(speed, 0)
+  return (
+    <div className="speedo" data-zone={zone} role="meter" aria-label="Current speed" aria-valuemin={SPEED_MIN} aria-valuemax={SPEED_MAX} aria-valuenow={Math.round(speed)} aria-valuetext={`${Math.round(speed)} km/h`}>
+      <svg viewBox="0 10 300 280" aria-hidden="true">
+        <circle className="speedo-bezel" cx={DIAL_CX} cy={DIAL_CY} r="136" />
+        <path className="speedo-track" d={dialArc(SPEED_MIN, SPEED_MAX, 118)} />
+        <path className="speedo-fill" d={dialArc(SPEED_MIN, SPEED_MAX, 118)} pathLength={100} style={{ strokeDasharray: `${pct * 100} 100` }} />
+        {speedZones.map((z) => <path key={z.zone} className={`speedo-band ${z.zone}`} d={dialArc(z.from, z.to, 101)} />)}
+        {speedTicks.map((v) => {
+          const major = (v - SPEED_MIN) % 30 === 0
+          const [x1, y1] = dialPoint(dialAngle(v), major ? 80 : 86)
+          const [x2, y2] = dialPoint(dialAngle(v), 94)
+          return <line key={v} className={`speedo-tick${major ? ' major' : ''}`} x1={x1} y1={y1} x2={x2} y2={y2} />
+        })}
+        {speedTicks.filter((v) => (v - SPEED_MIN) % 30 === 0).map((v) => {
+          const [x, y] = dialPoint(dialAngle(v), 64)
+          const limit = v === SPEED_MIN || v === SPEED_MAX
+          return <text key={v} className={`speedo-label${limit ? ' limit' : ''}`} x={x} y={y} textAnchor="middle" dominantBaseline="middle">{v}</text>
+        })}
+        <line className="speedo-needle" x1={DIAL_CX} y1={DIAL_CY} x2={DIAL_CX} y2={DIAL_CY - 98} style={{ transform: `rotate(${dialAngle(speed)}deg)` }} />
+        <circle className="speedo-hub" cx={DIAL_CX} cy={DIAL_CY} r="9" />
+      </svg>
+      <div className="speedo-readout">
+        <strong ref={valueRef} />
+        <span>km/h</span>
+      </div>
+    </div>
+  )
+}
+
+function MaintenanceTimer({ zone }: { zone: SpeedZone }) {
+  const rate = zoneRate(zone)
+  const { elapsed, at } = useServiceClock(rate)
+  const remaining = SERVICE_INTERVAL_MS - elapsed
+  const due = remaining <= 0
+  // 3500 hrs shown as days: starts at 145 days 20 hrs
+  const parts = [
+    { label: 'DAYS', value: String(Math.floor(remaining / DAY_MS)).padStart(3, '0') },
+    { label: 'HRS', value: String(Math.floor(remaining / HOUR_MS) % 24).padStart(2, '0') },
+    { label: 'MIN', value: String(Math.floor(remaining / 60_000) % 60).padStart(2, '0') },
+    { label: 'SEC', value: String(Math.floor(remaining / 1000) % 60).padStart(2, '0') },
+  ]
+  const used = elapsed / SERVICE_INTERVAL_MS
+  const fmtDate = (ms: number) => new Date(ms).toLocaleDateString([], { day: '2-digit', month: 'short', year: 'numeric' })
+
+  return (
+    <div className="maint-body" data-due={due}>
+      <div className="maint-status">
+        <span className="maint-eyebrow">{due ? 'MAINTENANCE DUE NOW' : 'NEXT SERVICE IN'}</span>
+        <span className="maint-rate" data-zone={zone} aria-label={`Maintenance clock running at ${rate}x`}>
+          <i aria-hidden="true" />{formatRate(rate)} SPEED
+        </span>
+      </div>
+      <div className="maint-timer" role="timer" aria-label="Time until next service">
+        {parts.map((p) => (
+          <div key={p.label}>
+            <strong>{p.value}</strong>
+            <span>{p.label}</span>
+          </div>
+        ))}
+      </div>
+      <div className="maint-progress">
+        <div>
+          <span>SERVICE INTERVAL USED</span>
+          <span>{(used * 100).toFixed(2)}%</span>
+        </div>
+        <div className="bar" aria-hidden="true">
+          <i style={{ width: `${used * 100}%` }} />
+        </div>
+      </div>
+      <div className="maint-facts">
+        <div><span>SERVICE INTERVAL</span><strong>{SERVICE_INTERVAL_HOURS} hrs = {Math.floor(SERVICE_INTERVAL_MS / DAY_MS)} days {Math.round((SERVICE_INTERVAL_MS % DAY_MS) / HOUR_MS)} hrs</strong></div>
+        <div><span>DAYS USED</span><strong>{(elapsed / DAY_MS).toFixed(2)} days</strong></div>
+        <div><span>DUE ON (AT {formatRate(rate)})</span><strong>{fmtDate(at + remaining / rate)}</strong></div>
+      </div>
+    </div>
+  )
+}
+
+function EcoModePanel({ onClose }: { onClose: () => void }) {
+  const { isPaused } = useTelemetry()
+  const [auto, setAuto] = useState(false)
+  const [manualSpeed, setManualSpeed] = useState(80)
+  const autoSpeed = useSimulatedSpeed(isPaused || !auto)
+  const speed = auto ? autoSpeed : manualSpeed
+  const zone = speedZoneFor(speed)
+
+  const setSpeed = (value: number) => {
+    setAuto(false)
+    setManualSpeed(Math.min(SPEED_MAX, Math.max(SPEED_MIN, Math.round(value))))
+  }
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose])
+
+  return (
+    <div className="analytics-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
+      <section className="analytics-panel eco-panel" role="dialog" aria-modal="true" aria-labelledby="eco-title">
+        <header className="analytics-heading">
+          <div>
+            <span className="analytics-eyebrow"><i />LIVE SIMULATION</span>
+            <h2 id="eco-title">ECO MODE</h2>
+          </div>
+          <button className="analytics-close" type="button" onClick={onClose} aria-label="Close ECO Mode"><X size={19} /></button>
+        </header>
+        <div className="eco-grid">
+          <article className="eco-card" aria-labelledby="eco-speed-title">
+            <div className="eco-card-title">
+              <Gauge size={20} aria-hidden="true" />
+              <h3 id="eco-speed-title">REQUIRED SPEED PARAMETER</h3>
+            </div>
+            <Speedometer speed={speed} />
+            <div className="speed-control">
+              <label htmlFor="eco-speed-input">SET SPEED</label>
+              <input
+                id="eco-speed-input"
+                type="range"
+                min={SPEED_MIN}
+                max={SPEED_MAX}
+                step={1}
+                value={Math.round(speed)}
+                data-zone={zone}
+                onChange={(event) => setSpeed(Number(event.target.value))}
+                aria-label="Set speed in km/h"
+              />
+              <button type="button" className={`speed-auto${auto ? ' active' : ''}`} aria-pressed={auto} onClick={() => { if (auto) setManualSpeed(Math.round(autoSpeed)); setAuto(!auto) }}>
+                AUTO
+              </button>
+            </div>
+            <div className="speed-zones" role="group" aria-label="Quick set speed zone">
+              {speedZones.map((z) => (
+                <button
+                  key={z.zone}
+                  type="button"
+                  className={`${z.zone}${zone === z.zone ? ' active' : ''}`}
+                  aria-pressed={zone === z.zone}
+                  aria-label={`Set ${z.label} speed ${z.preset} km/h`}
+                  onClick={() => setSpeed(z.preset)}
+                >
+                  <strong>{z.label} · {formatRate(z.rate)}</strong>
+                  {z.range}
+                </button>
+              ))}
+            </div>
+          </article>
+          <article className="eco-card" aria-labelledby="eco-maint-title">
+            <div className="eco-card-title">
+              <Wrench size={20} aria-hidden="true" />
+              <h3 id="eco-maint-title">MAINTENANCE REQUIRED</h3>
+            </div>
+            <MaintenanceTimer zone={zone} />
+          </article>
+        </div>
+      </section>
+    </div>
+  )
+}
 
 function TelemetryChart({ onClose }: { onClose: () => void }) {
   const { t } = useLanguage()

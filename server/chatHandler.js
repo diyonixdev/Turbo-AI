@@ -8,6 +8,17 @@
  */
 
 const DEFAULT_TIMEOUT_MS = 30000
+// gemini-2.5-flash is closed to new API keys, and the full Flash models are often
+// overloaded (503 "high demand") or hang. The lite models answer in 1-3 s.
+const DEFAULT_MODEL = 'gemini-3.5-flash-lite'
+const DEFAULT_FALLBACK_MODELS = ['gemini-flash-lite-latest', 'gemini-3.1-flash-lite']
+// One attempt may not use the whole budget, so a hanging model still leaves
+// time to try a fallback model.
+const ATTEMPT_TIMEOUT_MS = 12000
+// A 5xx or dropped connection gets one quick retry on the same model before
+// moving on to the next model.
+const RETRY_DELAYS_MS = [700]
+const RETRYABLE_UPSTREAM_STATUSES = new Set([500, 502, 503, 504])
 const MAX_MESSAGES = 20
 const MAX_CONTENT_LENGTH = 4000
 const TELEMETRY_FIELDS = [
@@ -22,10 +33,15 @@ const TELEMETRY_FIELDS = [
 
 export function readConfig() {
   const apiKey = (process.env.GEMINI_API_KEY || '').trim()
-  const model = (process.env.GEMINI_MODEL || 'gemini-2.5-flash').trim()
+  const model = (process.env.GEMINI_MODEL || DEFAULT_MODEL).trim()
+  // Comma-separated; unset uses the defaults, an empty value disables fallback.
+  const rawFallbacks = process.env.GEMINI_FALLBACK_MODELS
+  const fallbackModels = (rawFallbacks === undefined ? DEFAULT_FALLBACK_MODELS : rawFallbacks.split(','))
+    .map((name) => name.trim())
+    .filter((name, index, all) => name && name !== model && all.indexOf(name) === index)
   const rawTimeout = Number.parseInt(process.env.CHAT_TIMEOUT_MS || process.env.OPENROUTER_TIMEOUT_MS || '', 10)
   const timeoutMs = Number.isFinite(rawTimeout) && rawTimeout > 0 ? rawTimeout : DEFAULT_TIMEOUT_MS
-  return { apiKey, model, timeoutMs }
+  return { apiKey, model, fallbackModels, timeoutMs }
 }
 
 function fail(res, status, code, message) {
@@ -96,6 +112,78 @@ export function buildSystemPrompt(language, telemetry) {
   return lines.join('\n')
 }
 
+/**
+ * Gemini 2.5 Flash "thinks" by default and those thinking tokens count against
+ * maxOutputTokens, so a reply can run out of budget before any text is written
+ * (an empty reply). Flash allows thinking to be switched off; other models
+ * either cannot disable it or do not accept thinkingConfig, so they are left alone.
+ */
+export function buildGenerationConfig(model) {
+  const config = { temperature: 0.6, maxOutputTokens: 700 }
+  if (/^gemini-2\.5-flash/.test(model)) config.thinkingConfig = { thinkingBudget: 0 }
+  return config
+}
+
+/** Text of the first candidate, joining every non-thought text part. */
+export function extractReply(data) {
+  const parts = data?.candidates?.[0]?.content?.parts
+  if (!Array.isArray(parts)) return ''
+  return parts
+    .filter((part) => part && typeof part.text === 'string' && !part.thought)
+    .map((part) => part.text)
+    .join('')
+    .trim()
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * One generateContent call with its own time limit. Never throws: returns
+ * { kind: 'ok', reply } | { kind: 'empty', finish } | { kind: 'http', status, msg }
+ * | { kind: 'timeout' } | { kind: 'network' }.
+ */
+async function callGemini(model, body, apiKey, timeoutMs) {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const upstream = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
+      {
+        method: 'POST',
+        signal: controller.signal,
+        // The key travels in a header so it never appears in URLs or access logs.
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+        body,
+      }
+    )
+    const data = await upstream.json().catch(() => null)
+    if (!upstream.ok) {
+      const msg = typeof data?.error?.message === 'string' ? data.error.message.slice(0, 300) : ''
+      return { kind: 'http', status: upstream.status, msg }
+    }
+    const reply = extractReply(data)
+    if (!reply) return { kind: 'empty', finish: data?.candidates?.[0]?.finishReason || 'none' }
+    return { kind: 'ok', reply }
+  } catch (error) {
+    const name = error && error.name
+    return { kind: name === 'AbortError' || name === 'TimeoutError' ? 'timeout' : 'network' }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Maps the last failed attempt to the response the client sees. */
+function failFromAttempt(res, outcome) {
+  if (!outcome || outcome.kind === 'timeout') return fail(res, 504, 'timeout', 'The model took too long to respond.')
+  if (outcome.kind === 'network') return fail(res, 502, 'upstream', 'Could not reach Gemini.')
+  if (outcome.kind === 'empty') return fail(res, 502, 'upstream', 'The model returned an empty response.')
+  if (outcome.status === 429) return fail(res, 429, 'rate_limit', outcome.msg || 'Rate limit reached.')
+  if (outcome.status === 404) return fail(res, 502, 'model_unavailable', outcome.msg || 'The configured Gemini model was not found.')
+  return fail(res, 502, 'upstream', outcome.msg || 'Gemini request failed.')
+}
+
 export async function handleChat(req, res, options = {}) {
   const source = options.source || 'server'
   const startedAt = Date.now()
@@ -105,7 +193,7 @@ export async function handleChat(req, res, options = {}) {
     return fail(res, 405, 'invalid_request', 'Only POST requests are supported.')
   }
 
-  const { apiKey, model, timeoutMs } = readConfig()
+  const { apiKey, model, fallbackModels, timeoutMs } = readConfig()
   const body = req.body
 
   if (!body || typeof body !== 'object') {
@@ -129,69 +217,51 @@ export async function handleChat(req, res, options = {}) {
     return fail(res, 503, 'missing_model', 'GEMINI_MODEL is not configured on the server.')
   }
 
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
-
-  try {
-    const systemPrompt = buildSystemPrompt(language, telemetry)
-    const payload = JSON.stringify({
-      contents: [
-        { role: 'user', parts: [{ text: systemPrompt }] },
-        ...validated.messages.map((item) => ({
-          role: item.role === 'user' ? 'user' : 'model',
-          parts: [{ text: item.content }],
-        })),
-      ],
-      generationConfig: { temperature: 0.6, maxOutputTokens: 700 },
+  const systemPrompt = buildSystemPrompt(language, telemetry)
+  // Gemini conversations must open with a user turn, so leading assistant
+  // messages (the on-screen greeting) are dropped from the history sent.
+  const firstUser = validated.messages.findIndex((item) => item.role === 'user')
+  const turns = firstUser < 0 ? validated.messages : validated.messages.slice(firstUser)
+  const bodyFor = (name) =>
+    JSON.stringify({
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      contents: turns.map((item) => ({
+        role: item.role === 'user' ? 'user' : 'model',
+        parts: [{ text: item.content }],
+      })),
+      generationConfig: buildGenerationConfig(name),
     })
 
-    log(source, rid, 'request', `| lang=${language} | turns=${validated.messages.length} | model=${model} | chars=${payload.length}`)
+  const models = [model, ...fallbackModels]
+  log(source, rid, 'request', `| lang=${language} | turns=${turns.length} | models=${models.join(',')}`)
 
-    const upstream = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
-      {
-        method: 'POST',
-        signal: controller.signal,
-        // The key travels in a header so it never appears in URLs or access logs.
-        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
-        body: payload,
+  const deadline = startedAt + timeoutMs
+  let lastFailure = null
+  for (const name of models) {
+    for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) break
+      const outcome = await callGemini(name, bodyFor(name), apiKey, Math.min(ATTEMPT_TIMEOUT_MS, remaining))
+      if (outcome.kind === 'ok') {
+        log(source, rid, 'ok', `| ms=${Date.now() - startedAt} | lang=${language} | model=${name}`)
+        return res.status(200).json({ reply: outcome.reply, model: name })
       }
-    )
-
-    const data = await upstream.json().catch(() => null)
-
-    if (!upstream.ok) {
-      const msg = typeof data?.error?.message === 'string' ? data.error.message.slice(0, 300) : ''
-      log(source, rid, 'upstream-error', `| status=${upstream.status} | ms=${Date.now() - startedAt}`)
-      if (upstream.status === 429) {
-        return fail(res, 429, 'rate_limit', msg || 'Rate limit reached.')
-      }
-      if (upstream.status === 401 || upstream.status === 402 || upstream.status === 403) {
+      lastFailure = outcome
+      const detail = outcome.kind === 'http' ? `status=${outcome.status}` : outcome.kind === 'empty' ? `empty finish=${outcome.finish}` : outcome.kind
+      log(source, rid, 'attempt-failed', `| model=${name} | ${detail} | ms=${Date.now() - startedAt}`)
+      // A rejected key fails the same way on every model.
+      if (outcome.kind === 'http' && [401, 402, 403].includes(outcome.status)) {
         return fail(res, 502, 'auth', 'Gemini rejected the API key.')
       }
-      if (upstream.status === 404) {
-        return fail(res, 502, 'model_unavailable', msg || 'The configured Gemini model was not found.')
-      }
-      return fail(res, 502, 'upstream', msg || 'Gemini request failed.')
+      const retrySameModel =
+        outcome.kind === 'network' || (outcome.kind === 'http' && RETRYABLE_UPSTREAM_STATUSES.has(outcome.status))
+      if (!retrySameModel || attempt >= RETRY_DELAYS_MS.length) break
+      await sleep(Math.min(RETRY_DELAYS_MS[attempt], Math.max(0, deadline - Date.now())))
     }
-
-    const reply = data?.candidates?.[0]?.content?.parts?.[0]?.text
-    if (typeof reply !== 'string' || !reply.trim()) {
-      log(source, rid, 'empty-reply', `| ms=${Date.now() - startedAt}`)
-      return fail(res, 502, 'upstream', 'The model returned an empty response.')
-    }
-
-    log(source, rid, 'ok', `| ms=${Date.now() - startedAt} | lang=${language} | model=${model}`)
-    return res.status(200).json({ reply: reply.trim(), model })
-  } catch (error) {
-    const name = error && error.name
-    if (name === 'AbortError' || name === 'TimeoutError') {
-      log(source, rid, 'timeout', `| after=${timeoutMs}ms`)
-      return fail(res, 504, 'timeout', 'The model took too long to respond.')
-    }
-    log(source, rid, 'network-error', `| ms=${Date.now() - startedAt}`)
-    return fail(res, 502, 'upstream', 'Could not reach Gemini.')
-  } finally {
-    clearTimeout(timer)
+    if (deadline - Date.now() <= 0) break
   }
+
+  if (deadline - Date.now() <= 0 && lastFailure?.kind !== 'http') lastFailure = { kind: 'timeout' }
+  log(source, rid, 'failed', `| ms=${Date.now() - startedAt}`)
+  return failFromAttempt(res, lastFailure)
 }

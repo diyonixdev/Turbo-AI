@@ -189,7 +189,10 @@ export async function sendChat(options: SendChatOptions): Promise<string> {
 
     if (!response.ok) {
       const serverCode = payload?.error?.code
-      const code = inferCode(response.status, serverCode)
+      // Our backend always answers with a JSON error. A bare 502/503/504 comes from
+      // a proxy (the Vite dev proxy, Render waking up) that could not reach it.
+      const backendUnreachable = payload === null && [502, 503, 504].includes(response.status)
+      const code = backendUnreachable ? 'network' : inferCode(response.status, serverCode)
       const message = typeof payload?.error?.message === 'string' ? payload.error.message : undefined
       diag('chat', 'http-error', { requestId, status: response.status, code })
       throw new ChatError(code, message)

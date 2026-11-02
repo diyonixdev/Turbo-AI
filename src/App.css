@@ -8,6 +8,7 @@
   --green-bright: #48ff91;
   --cyan: #24d9f2;
   --amber: #ffb547;
+  --yellow: #ffe14d;
   --red: #ff514f;
   --text: #f1f8f5;
   --muted: #86a7a4;
@@ -52,6 +53,7 @@
   --green-bright: #0fb873;
   --cyan: #078ea3;
   --amber: #c78212;
+  --yellow: #a88a00;
   --red: #d83f45;
   --text: #15251f;
   --muted: #64766d;
@@ -240,36 +242,41 @@
   gap: 10px;
 }
 
-.graph-mode-button {
+.eco-button {
   position: relative;
-  display: grid;
-  place-items: center;
-  width: 48px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   height: 48px;
+  padding: 0 16px 0 12px;
   justify-self: center;
-  border: 1px solid color-mix(in srgb, var(--cyan) 45%, var(--border));
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 25%, color-mix(in srgb, var(--cyan) 15%, var(--surface)), var(--surface));
-  color: var(--cyan);
+  border: 1px solid color-mix(in srgb, var(--green) 50%, var(--border));
+  border-radius: 999px;
+  background: radial-gradient(circle at 30% 25%, color-mix(in srgb, var(--green) 16%, var(--surface)), var(--surface));
+  color: var(--green-bright);
+  font: 900 15px var(--font-display);
+  letter-spacing: 1.4px;
   cursor: pointer;
-  box-shadow: 0 0 18px color-mix(in srgb, var(--cyan) 18%, transparent), inset 0 0 15px rgba(34, 245, 160, .05);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--green) 18%, transparent), inset 0 0 15px rgba(34, 245, 160, .05);
   transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
-  animation: graphIconGlow 2.8s ease-in-out infinite;
+  animation: ecoIconGlow 2.8s ease-in-out infinite;
 }
 
-.graph-mode-button:hover,
-.graph-mode-button:focus-visible {
+.eco-button:hover,
+.eco-button:focus-visible {
   transform: translateY(-1px);
   border-color: var(--green-bright);
-  color: var(--green-bright);
   box-shadow: 0 0 24px color-mix(in srgb, var(--green) 35%, transparent), inset 0 0 15px rgba(34, 245, 160, .08);
 }
 
-.graph-mode-button:focus-visible { outline: 2px solid var(--green); outline-offset: 3px; }
-.graph-mode-button i { position: absolute; top: 5px; right: 5px; width: 8px; height: 8px; border-radius: 50%; background: var(--green-bright); box-shadow: 0 0 9px var(--green); }
+.eco-button:focus-visible { outline: 2px solid var(--green); outline-offset: 3px; }
 
-@keyframes graphIconGlow {
-  50% { box-shadow: 0 0 24px color-mix(in srgb, var(--cyan) 28%, transparent), inset 0 0 15px rgba(34, 245, 160, .08); }
+/* Leaf badge tucked onto the speedometer icon */
+.eco-icon { position: relative; display: grid; place-items: center; }
+.eco-icon .eco-leaf { position: absolute; right: -6px; bottom: -4px; padding: 1px; border-radius: 50%; background: var(--surface); color: var(--green); }
+
+@keyframes ecoIconGlow {
+  50% { box-shadow: 0 0 26px color-mix(in srgb, var(--green) 30%, transparent), inset 0 0 15px rgba(34, 245, 160, .08); }
 }
 
 .language-switch {
@@ -1385,14 +1392,14 @@
     padding: 12px;
   }
   .topbar {
-    grid-template-columns: minmax(175px, auto) minmax(0, 1fr) 48px max-content;
+    grid-template-columns: minmax(175px, auto) minmax(0, 1fr) max-content max-content;
     grid-template-rows: auto auto;
     gap: 6px;
     padding: 6px 10px;
   }
   .topbar > .brand { grid-column: 1; grid-row: 1; }
   .topbar > .topbar-center { grid-column: 2; grid-row: 1; min-width: 0; }
-  .topbar > .graph-mode-button { grid-column: 3; grid-row: 1; }
+  .topbar > .eco-button { grid-column: 3; grid-row: 1; }
   .topbar > .topbar-actions { grid-column: 4; grid-row: 1; }
   .brand-title { font-size: 22px; }
   .brand-subtitle { font-size: 11px; }
@@ -1427,7 +1434,7 @@
   }
   .topbar > .brand { grid-column: 1 / -1; grid-row: 1; }
   .topbar > .topbar-center { grid-column: 1 / -1; grid-row: 2; grid-template-columns: minmax(95px, 1fr) minmax(100px, 1.2fr) max-content; gap: 6px; }
-  .topbar > .graph-mode-button { grid-column: 1; grid-row: 3; justify-self: start; }
+  .topbar > .eco-button { grid-column: 1; grid-row: 3; justify-self: start; }
   .topbar > .topbar-actions { grid-column: 2; grid-row: 3; gap: 5px; }
   .language-switch { width: 112px; height: 36px; }
   .icon-button { width: 36px; height: 36px; }
@@ -1468,7 +1475,7 @@
   }
 
   .topbar {
-    grid-template-columns: 155px minmax(335px, 1fr) 48px max-content;
+    grid-template-columns: 155px minmax(335px, 1fr) max-content max-content;
     gap: 6px;
     padding-inline: 10px;
   }
@@ -1648,12 +1655,12 @@
 
 @media (min-width: 769px) and (max-width: 1024px) {
   .topbar {
-    grid-template-columns: minmax(175px, auto) minmax(0, 1fr) 48px max-content;
+    grid-template-columns: minmax(175px, auto) minmax(0, 1fr) max-content max-content;
     grid-template-rows: auto auto;
   }
   .topbar > .brand { grid-column: 1; grid-row: 1; }
   .topbar > .topbar-center { grid-column: 2; grid-row: 1; min-width: 0; }
-  .topbar > .graph-mode-button { grid-column: 3; grid-row: 1; }
+  .topbar > .eco-button { grid-column: 3; grid-row: 1; }
   .topbar > .topbar-actions { grid-column: 4; grid-row: 1; }
 }
 
@@ -1668,7 +1675,7 @@
   }
   .topbar > .brand { grid-column: 1 / -1; grid-row: 1; }
   .topbar > .topbar-center { grid-column: 1 / -1; grid-row: 2; grid-template-columns: minmax(85px, .8fr) minmax(65px, 1fr) max-content; gap: 5px; }
-  .topbar > .graph-mode-button { grid-column: 1; grid-row: 3; width: 40px; height: 40px; }
+  .topbar > .eco-button { grid-column: 1; grid-row: 3; justify-self: start; height: 40px; }
   .topbar > .topbar-actions { grid-column: 2; grid-row: 3; gap: 4px; }
   .language-switch { width: 102px; height: 34px; }
   .icon-button { width: 32px; height: 32px; }
@@ -1685,4 +1692,121 @@
   .analytics-controls select { min-width: 0; flex: 1; }
   .analytics-ranges { width: 100%; justify-content: flex-end; margin-left: 0; }
   .analytics-chart-wrap { min-height: 220px; }
+}
+
+/* ================= ECO Mode ================= */
+/* Reuses the .analytics-* modal shell; these rules cover only the ECO content */
+.eco-panel { grid-template-rows: auto 1fr; width: min(1120px, calc(100vw - 40px)); }
+
+.eco-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; min-height: 0; }
+
+.eco-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
+}
+
+.eco-card-title { display: flex; align-items: center; gap: 10px; margin: 0; color: var(--green); }
+.eco-card-title h3 { margin: 0; color: var(--text); font-size: clamp(14px, 1.2vw, 17px); font-weight: 900; letter-spacing: .7px; }
+
+/* Speedometer: zone colour drives the active arc, needle, hub and readout */
+.speedo { --speed-color: var(--green); position: relative; width: min(100%, 420px, 44dvh); margin: 0 auto; aspect-ratio: 300 / 280; container-type: inline-size; }
+.speedo[data-zone='low'] { --speed-color: var(--yellow); }
+.speedo[data-zone='high'] { --speed-color: var(--red); }
+.speedo svg { display: block; width: 100%; height: 100%; }
+.speedo-bezel { fill: color-mix(in srgb, var(--bg) 70%, transparent); stroke: color-mix(in srgb, var(--green) 22%, var(--border)); stroke-width: 2; }
+.speedo-track { fill: none; stroke: color-mix(in srgb, var(--muted) 16%, transparent); stroke-width: 16; stroke-linecap: round; }
+.speedo-band { fill: none; stroke-width: 5; opacity: .55; }
+.speedo-band.low { stroke: var(--yellow); }
+.speedo-band.eco { stroke: var(--green); }
+.speedo-band.high { stroke: var(--red); }
+.speedo-fill {
+  fill: none;
+  stroke: var(--speed-color);
+  stroke-width: 16;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 7px color-mix(in srgb, var(--speed-color) 55%, transparent));
+  transition: stroke-dasharray 450ms cubic-bezier(0.215, 0.61, 0.355, 1), stroke 300ms ease, filter 300ms ease;
+}
+.speedo-tick { stroke: color-mix(in srgb, var(--text) 70%, transparent); stroke-width: 1.5; opacity: .45; }
+.speedo-tick.major { stroke-width: 2.5; opacity: .9; }
+.speedo-label { fill: var(--muted); font: 900 13px var(--font-display); }
+.speedo-label.limit { fill: var(--text); font-size: 15px; }
+.speedo-needle {
+  stroke: var(--speed-color);
+  stroke-width: 4;
+  stroke-linecap: round;
+  transform-box: view-box;
+  transform-origin: 150px 150px;
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--speed-color) 65%, transparent));
+  transition: transform 450ms cubic-bezier(0.215, 0.61, 0.355, 1), stroke 300ms ease, filter 300ms ease;
+}
+.speedo-hub { fill: var(--surface); stroke: var(--speed-color); stroke-width: 3; transition: stroke 300ms ease; }
+
+/* Sits in the dial's open bottom gap, which the needle never crosses */
+.speedo-readout { position: absolute; left: 0; right: 0; bottom: 2%; display: grid; justify-items: center; gap: 2px; line-height: 1; }
+.speedo-readout strong { color: var(--speed-color); font-size: clamp(30px, 14cqw, 60px); font-variant-numeric: tabular-nums; text-shadow: 0 0 18px color-mix(in srgb, var(--speed-color) 35%, transparent); transition: color 300ms ease; }
+.speedo-readout span { color: var(--muted); font-size: clamp(12px, 3.6cqw, 15px); font-weight: 900; letter-spacing: 1px; }
+
+/* Manual speed: slider + AUTO toggle; the slider thumb takes the zone colour */
+.speed-control { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.speed-control label { color: var(--muted); font-size: 11px; font-weight: 900; letter-spacing: .8px; }
+.speed-control input[type='range'] { width: 100%; accent-color: var(--green); cursor: pointer; }
+.speed-control input[data-zone='low'] { accent-color: var(--yellow); }
+.speed-control input[data-zone='high'] { accent-color: var(--red); }
+/* .speed-control prefix outranks the global `.dashboard button { font: inherit }` */
+.speed-control .speed-auto { height: 32px; padding: 0 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--muted); font: 900 11px var(--font-display); letter-spacing: 1px; cursor: pointer; transition: color 150ms ease, border-color 150ms ease, background 150ms ease; }
+.speed-auto:hover, .speed-auto:focus-visible { border-color: var(--green); color: var(--green-bright); }
+.speed-auto.active { border-color: var(--green); background: color-mix(in srgb, var(--green) 14%, var(--surface)); color: var(--green-bright); }
+
+.speed-zones { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.speed-zones button { display: grid; gap: 3px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px; background: transparent; color: var(--muted); font: 900 11px var(--font-display); letter-spacing: .5px; text-align: left; cursor: pointer; transition: border-color 300ms ease, background 300ms ease, color 300ms ease; }
+.speed-zones button:hover, .speed-zones button:focus-visible { color: var(--text); border-color: color-mix(in srgb, var(--text) 30%, var(--border)); }
+.speed-zones button strong { font-size: 13px; }
+.speed-zones button.low strong { color: var(--yellow); }
+.speed-zones button.eco strong { color: var(--green); }
+.speed-zones button.high strong { color: var(--red); }
+.speed-zones button.active { color: var(--text); }
+.speed-zones button.low.active { border-color: var(--yellow); background: color-mix(in srgb, var(--yellow) 10%, transparent); }
+.speed-zones button.eco.active { border-color: var(--green); background: color-mix(in srgb, var(--green) 10%, transparent); }
+.speed-zones button.high.active { border-color: var(--red); background: color-mix(in srgb, var(--red) 10%, transparent); }
+
+/* Maintenance: digital countdown */
+.maint-body { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 18px; }
+.maint-status { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.maint-eyebrow { color: var(--muted); font-size: 12px; font-weight: 900; letter-spacing: 1px; }
+.maint-rate { --rate-color: var(--green); display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px; border: 1px solid color-mix(in srgb, var(--rate-color) 55%, var(--border)); border-radius: 999px; background: color-mix(in srgb, var(--rate-color) 10%, transparent); color: var(--rate-color); font-size: 12px; font-weight: 900; letter-spacing: .8px; transition: color 300ms ease, border-color 300ms ease, background 300ms ease; }
+.maint-rate[data-zone='low'] { --rate-color: var(--yellow); }
+.maint-rate[data-zone='high'] { --rate-color: var(--red); }
+.maint-rate i { width: 7px; height: 7px; border-radius: 50%; background: var(--rate-color); box-shadow: 0 0 8px var(--rate-color); animation: blink 1.45s ease-in-out infinite; }
+/* Days box is a little wider: the countdown starts at 3 digits (145) */
+.maint-timer { display: grid; grid-template-columns: minmax(0, 1.3fr) repeat(3, minmax(0, 1fr)); gap: 8px; }
+.maint-timer > div { display: grid; justify-items: center; gap: 6px; padding: 14px 4px 10px; border: 1px solid color-mix(in srgb, var(--green) 30%, var(--border)); border-radius: 11px; background: color-mix(in srgb, var(--bg) 65%, transparent); }
+.maint-timer strong { color: var(--green-bright); font-size: clamp(28px, 3.2vw, 46px); line-height: 1; font-variant-numeric: tabular-nums; letter-spacing: 2px; text-shadow: 0 0 16px color-mix(in srgb, var(--green) 45%, transparent); }
+.maint-timer span { color: var(--muted); font-size: 10px; font-weight: 900; letter-spacing: 1px; }
+.maint-progress { display: grid; gap: 7px; }
+.maint-progress > div { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; font-weight: 900; letter-spacing: .5px; }
+.maint-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+/* "3500 hrs = 145 days 20 hrs" gets a full-width row */
+.maint-facts > div:first-child { grid-column: 1 / -1; }
+.maint-facts > div { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; }
+.maint-facts span { color: var(--muted); font-size: 10px; font-weight: 900; letter-spacing: .6px; }
+.maint-facts strong { color: var(--text); font-size: 15px; font-variant-numeric: tabular-nums; }
+
+/* Interval used up: switch the countdown to red */
+.maint-body[data-due='true'] .maint-eyebrow { color: var(--red); }
+.maint-body[data-due='true'] .maint-timer > div { border-color: color-mix(in srgb, var(--red) 55%, var(--border)); }
+.maint-body[data-due='true'] .maint-timer strong { color: var(--red); text-shadow: 0 0 16px color-mix(in srgb, var(--red) 45%, transparent); }
+.maint-body[data-due='true'] .bar i { background: var(--red); box-shadow: 0 0 12px color-mix(in srgb, var(--red) 58%, transparent); }
+
+@media (max-width: 768px) {
+  .eco-grid { grid-template-columns: 1fr; }
+  .eco-card { padding: 14px; }
+  .maint-timer strong { font-size: 26px; }
+  .maint-facts strong { font-size: 13px; }
 }

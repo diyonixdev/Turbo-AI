@@ -1,6 +1,13 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { cancelSpeech, isSpeechActive } from './speechController'
 import { useVoiceAssistant } from './useVoiceAssistant'
+
+// Real speech controller, with spies so tests can simulate a greeting in progress
+vi.mock('./speechController', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./speechController')>()
+  return { ...actual, isSpeechActive: vi.fn(() => false), cancelSpeech: vi.fn(actual.cancelSpeech) }
+})
 
 type Handler = ((event: unknown) => void) | null
 
@@ -174,5 +181,44 @@ describe('useVoiceAssistant', () => {
     act(() => rec.onerror?.({ error: 'not-allowed' }))
     await waitFor(() => expect(result.current.state).toBe('error'))
     expect(result.current.message).toBeTruthy()
+  })
+
+  it('hands the mic over: starting a second assistant stops the one that was listening', () => {
+    const dashboard = renderHook(() => useVoiceAssistant('en', 0.7))
+    const driver = renderHook(() => useVoiceAssistant('en', 0.7))
+    const [dashboardRec, driverRec] = FakeRecognition.instances
+
+    act(() => dashboard.result.current.startListening(vi.fn()))
+    expect(dashboard.result.current.voiceActive).toBe(true)
+
+    act(() => driver.result.current.startListening(vi.fn()))
+    expect(driver.result.current.voiceActive).toBe(true)
+    expect(driverRec.start).toHaveBeenCalledTimes(1)
+    expect(dashboard.result.current.voiceActive).toBe(false)
+    expect(dashboard.result.current.state).toBe('idle')
+    expect(dashboardRec.stop).toHaveBeenCalled()
+  })
+
+  it('silences a greeting that is still being spoken when the mic is tapped', () => {
+    vi.mocked(isSpeechActive).mockReturnValueOnce(true)
+    const { result } = renderHook(() => useVoiceAssistant('en', 0.7))
+    act(() => result.current.startListening(vi.fn()))
+    expect(cancelSpeech).toHaveBeenCalledWith('listen')
+    expect(FakeRecognition.instances[0].start).toHaveBeenCalledTimes(1)
+  })
+
+  it('aborts and retries a start that never begins instead of staying stuck', () => {
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useVoiceAssistant('en', 0.7))
+    act(() => result.current.startListening(vi.fn()))
+    const rec = FakeRecognition.instances[0]
+    expect(rec.start).toHaveBeenCalledTimes(1)
+
+    // The fake never fires onstart, like a browser that silently ignores start()
+    act(() => vi.advanceTimersByTime(4000))
+    expect(rec.abort).toHaveBeenCalledTimes(1)
+    act(() => vi.advanceTimersByTime(300))
+    expect(rec.start).toHaveBeenCalledTimes(2)
+    expect(result.current.voiceActive).toBe(true)
   })
 })

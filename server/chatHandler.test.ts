@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { buildSystemPrompt, handleChat, readConfig } from './chatHandler'
+import { buildGenerationConfig, buildSystemPrompt, extractReply, handleChat, readConfig } from './chatHandler'
 
 type Res = {
   statusCode: number
@@ -45,11 +45,21 @@ function withEnv(vars: Record<string, string | undefined>, run: () => Promise<vo
 
 describe('readConfig', () => {
   it('falls back to defaults for missing optional values', async () => {
-    await withEnv({ GEMINI_MODEL: undefined, CHAT_TIMEOUT_MS: undefined }, () => {
+    await withEnv({ GEMINI_MODEL: undefined, GEMINI_FALLBACK_MODELS: undefined, CHAT_TIMEOUT_MS: undefined }, () => {
       const config = readConfig()
-      expect(config.model).toBe('gemini-2.5-flash')
+      expect(config.model).toBe('gemini-3.5-flash-lite')
+      expect(config.fallbackModels).toEqual(['gemini-flash-lite-latest', 'gemini-3.1-flash-lite'])
       expect(config.timeoutMs).toBe(30000)
       return Promise.resolve()
+    })
+  })
+
+  it('parses fallback models, dropping blanks, duplicates and the primary model', async () => {
+    await withEnv({ GEMINI_MODEL: 'a', GEMINI_FALLBACK_MODELS: ' b, a ,,c,b ' }, async () => {
+      expect(readConfig().fallbackModels).toEqual(['b', 'c'])
+    })
+    await withEnv({ GEMINI_MODEL: 'a', GEMINI_FALLBACK_MODELS: '' }, async () => {
+      expect(readConfig().fallbackModels).toEqual([])
     })
   })
 
@@ -239,5 +249,102 @@ describe('handleChat', () => {
         expect((res.body as { error: { code: string } }).error.code).toBe('timeout')
       }
     )
+  })
+
+  it('retries a temporarily overloaded Gemini (503) and then succeeds', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 503, json: async () => ({ error: { message: 'The model is overloaded.' } }) })
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: 'RPM is 2450.' }] } }] }) })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await withEnv({ GEMINI_API_KEY: 'k', GEMINI_MODEL: 'gemini-2.5-flash' }, async () => {
+      const res = makeRes()
+      await handleChat(req({ messages: [{ role: 'user', content: 'what is rpm' }] }), res as never, { source: 'test' })
+      expect(res.statusCode).toBe(200)
+      expect(res.body).toEqual({ reply: 'RPM is 2450.', model: 'gemini-2.5-flash' })
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('gives up after one retry per model when every model stays unavailable', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 503, json: async () => ({}) })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await withEnv({ GEMINI_API_KEY: 'k', GEMINI_MODEL: 'primary', GEMINI_FALLBACK_MODELS: 'backup' }, async () => {
+      const res = makeRes()
+      await handleChat(req({ messages: [{ role: 'user', content: 'hi' }] }), res as never, { source: 'test' })
+      expect(res.statusCode).toBe(502)
+      expect((res.body as { error: { code: string } }).error.code).toBe('upstream')
+    })
+    const urls = fetchMock.mock.calls.map((call) => call[0] as string)
+    expect(urls.filter((url) => url.includes('/primary:'))).toHaveLength(2)
+    expect(urls.filter((url) => url.includes('/backup:'))).toHaveLength(2)
+  })
+
+  it('falls back to the next model when the primary is overloaded or retired', async () => {
+    const fetchMock = vi.fn((url: string) =>
+      Promise.resolve(
+        url.includes('/backup:')
+          ? { ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: 'RPM is 2450.' }] } }] }) }
+          : { ok: false, status: 404, json: async () => ({ error: { message: 'no longer available to new users' } }) }
+      )
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await withEnv({ GEMINI_API_KEY: 'k', GEMINI_MODEL: 'primary', GEMINI_FALLBACK_MODELS: 'backup' }, async () => {
+      const res = makeRes()
+      await handleChat(req({ messages: [{ role: 'user', content: 'what is rpm' }] }), res as never, { source: 'test' })
+      expect(res.statusCode).toBe(200)
+      expect(res.body).toEqual({ reply: 'RPM is 2450.', model: 'backup' })
+    })
+    // A 404 is not retried on the same model: straight to the fallback
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not try other models when the API key is rejected', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 403, json: async () => ({}) })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await withEnv({ GEMINI_API_KEY: 'k', GEMINI_MODEL: 'primary', GEMINI_FALLBACK_MODELS: 'backup' }, async () => {
+      const res = makeRes()
+      await handleChat(req({ messages: [{ role: 'user', content: 'hi' }] }), res as never, { source: 'test' })
+      expect((res.body as { error: { code: string } }).error.code).toBe('auth')
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('sends instructions as systemInstruction and starts the conversation with a user turn', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }) })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await withEnv({ GEMINI_API_KEY: 'k', GEMINI_MODEL: 'gemini-2.5-flash' }, async () => {
+      const messages = [
+        { role: 'assistant', content: 'Hello! I am Turbo AI.' },
+        { role: 'user', content: 'what is rpm' },
+      ]
+      await handleChat(req({ messages, language: 'en' }), makeRes() as never, { source: 'test' })
+    })
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)
+    expect(body.systemInstruction.parts[0].text).toContain('You are Turbo AI')
+    expect(body.contents).toEqual([{ role: 'user', parts: [{ text: 'what is rpm' }] }])
+    expect(body.generationConfig.thinkingConfig).toEqual({ thinkingBudget: 0 })
+  })
+})
+
+describe('buildGenerationConfig', () => {
+  it('turns off thinking only for Gemini 2.5 Flash models', () => {
+    expect(buildGenerationConfig('gemini-2.5-flash').thinkingConfig).toEqual({ thinkingBudget: 0 })
+    expect(buildGenerationConfig('gemini-2.5-flash-lite').thinkingConfig).toEqual({ thinkingBudget: 0 })
+    expect(buildGenerationConfig('gemini-2.5-pro').thinkingConfig).toBeUndefined()
+    expect(buildGenerationConfig('gemini-2.0-flash').thinkingConfig).toBeUndefined()
+  })
+})
+
+describe('extractReply', () => {
+  it('joins every text part and skips thought parts', () => {
+    const data = { candidates: [{ content: { parts: [{ text: 'thinking...', thought: true }, { text: 'RPM is ' }, { text: '2450.' }] } }] }
+    expect(extractReply(data)).toBe('RPM is 2450.')
+    expect(extractReply({})).toBe('')
   })
 })

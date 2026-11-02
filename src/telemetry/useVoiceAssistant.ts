@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { translations } from '../i18n/translations'
 import type { Language, TranslationKey } from '../i18n/translations'
 import { diag } from '../lib/diagnostics'
-import { cancelSpeech, isVoiceOutputEnabled, speakOnce } from './speechController'
+import { cancelSpeech, isSpeechActive, isVoiceOutputEnabled, speakOnce } from './speechController'
 
 export type VoiceState = 'idle' | 'listening' | 'processing' | 'speaking' | 'paused' | 'error'
 
@@ -63,6 +63,14 @@ type SpeechRecognitionCtor = new () => SpeechRecognitionLike
 const NO_SPEECH_TIMEOUT_MS = 15000
 const MAX_CONSECUTIVE_FAILURES = 5
 const DUPLICATE_WINDOW_MS = 2500
+// If the browser accepts start() but never fires onstart/onend, the session is
+// stuck; give it this long before aborting and retrying.
+const START_TIMEOUT_MS = 4000
+
+// Browsers allow one live SpeechRecognition at a time. The dashboard assistant
+// and Driver Mode each own an instance, so starting one hands the mic over by
+// stopping whichever instance held it.
+let micOwner: { id: symbol; stop: () => void } | null = null
 
 function getRecognitionCtor(): SpeechRecognitionCtor | null {
   if (typeof window === 'undefined') return null
@@ -93,9 +101,13 @@ export function useVoiceAssistant(language: Language, volumeLevel = 0.7): VoiceA
   const onResultRef = useRef<((text: string) => void) | null>(null)
   const restartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const startWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const armStartWatchdogRef = useRef<(rec: SpeechRecognitionLike) => void>(() => {})
+  const hardStopRef = useRef<(nextState: VoiceState) => void>(() => {})
   const languageRef = useRef<Language>(language)
   const volumeRef = useRef(volumeLevel)
   const mountedRef = useRef(false)
+  const [ownerId] = useState(() => Symbol('voice-assistant'))
 
   useEffect(() => {
     languageRef.current = language
@@ -117,6 +129,13 @@ export function useVoiceAssistant(language: Language, volumeLevel = 0.7): VoiceA
     if (inactivityTimerRef.current) {
       clearTimeout(inactivityTimerRef.current)
       inactivityTimerRef.current = null
+    }
+  }, [])
+
+  const clearStartWatchdog = useCallback(() => {
+    if (startWatchdogRef.current) {
+      clearTimeout(startWatchdogRef.current)
+      startWatchdogRef.current = null
     }
   }, [])
 
@@ -143,6 +162,7 @@ export function useVoiceAssistant(language: Language, volumeLevel = 0.7): VoiceA
         try {
           rec.start()
           diag('voice', 'restart')
+          armStartWatchdogRef.current(rec)
         } catch {
           startingRef.current = false
           failureCountRef.current += 1
@@ -160,6 +180,36 @@ export function useVoiceAssistant(language: Language, volumeLevel = 0.7): VoiceA
     },
     [clearRestart]
   )
+
+  // Recovers a start() that never produced onstart/onend: abort it, then retry
+  // while the user still wants to listen (counting it as a failure).
+  useEffect(() => {
+    armStartWatchdogRef.current = (rec: SpeechRecognitionLike) => {
+      clearStartWatchdog()
+      startWatchdogRef.current = setTimeout(() => {
+        startWatchdogRef.current = null
+        if (!mountedRef.current || recRef.current !== rec || !startingRef.current || runningRef.current) return
+        startingRef.current = false
+        diag('voice', 'start-timeout')
+        try {
+          if (typeof rec.abort === 'function') rec.abort()
+          else rec.stop()
+        } catch {
+          // ignore
+        }
+        if (!wantListeningRef.current || suspendedRef.current) return
+        failureCountRef.current += 1
+        if (failureCountRef.current >= MAX_CONSECUTIVE_FAILURES) {
+          wantListeningRef.current = false
+          setVoiceActive(false)
+          setState('error')
+          setMessageKey('voice.recognitionFailed')
+          return
+        }
+        scheduleRestart(300)
+      }, START_TIMEOUT_MS)
+    }
+  }, [clearStartWatchdog, scheduleRestart])
 
   const armInactivity = useCallback(() => {
     clearInactivity()
@@ -201,8 +251,13 @@ export function useVoiceAssistant(language: Language, volumeLevel = 0.7): VoiceA
         clearTimeout(inactivityTimerRef.current)
         inactivityTimerRef.current = null
       }
+      if (startWatchdogRef.current) {
+        clearTimeout(startWatchdogRef.current)
+        startWatchdogRef.current = null
+      }
       setTimeout(() => {
         if (mountedRef.current) return
+        if (micOwner?.id === ownerId) micOwner = null
         wantListeningRef.current = false
         suspendedRef.current = false
         onResultRef.current = null
@@ -210,7 +265,7 @@ export function useVoiceAssistant(language: Language, volumeLevel = 0.7): VoiceA
         diag('voice', 'unmounted')
       }, 0)
     }
-  }, [])
+  }, [ownerId])
 
   // Recognition instance: one per language, handlers detached on cleanup so
   // stale callbacks from an old instance can never fire. An unsupported browser
@@ -231,6 +286,7 @@ export function useVoiceAssistant(language: Language, volumeLevel = 0.7): VoiceA
       if (recRef.current !== rec || !mountedRef.current) return
       runningRef.current = true
       startingRef.current = false
+      clearStartWatchdog()
       failureCountRef.current = 0
       diag('voice', 'start', { lang: rec.lang })
       if (wantListeningRef.current && !suspendedRef.current) {
@@ -309,6 +365,7 @@ export function useVoiceAssistant(language: Language, volumeLevel = 0.7): VoiceA
       if (recRef.current !== rec) return
       runningRef.current = false
       startingRef.current = false
+      clearStartWatchdog()
       clearInactivity()
       diag('voice', 'end', { want: wantListeningRef.current, suspended: suspendedRef.current })
       if (!mountedRef.current) return
@@ -320,6 +377,7 @@ export function useVoiceAssistant(language: Language, volumeLevel = 0.7): VoiceA
       startingRef.current = true
       try {
         rec.start()
+        armStartWatchdogRef.current(rec)
       } catch {
         startingRef.current = false
       }
@@ -341,11 +399,18 @@ export function useVoiceAssistant(language: Language, volumeLevel = 0.7): VoiceA
       }
       clearRestart()
       clearInactivity()
+      clearStartWatchdog()
     }
-  }, [language, isSupported, armInactivity, clearInactivity, clearRestart, scheduleRestart, submitTranscript])
+  }, [language, isSupported, armInactivity, clearInactivity, clearRestart, clearStartWatchdog, scheduleRestart, submitTranscript])
 
   const startListening = useCallback(
     (onResult: (text: string) => void): boolean => {
+      // Take over the mic from the other assistant instance, if it has it.
+      if (micOwner && micOwner.id !== ownerId) micOwner.stop()
+      micOwner = { id: ownerId, stop: () => hardStopRef.current('idle') }
+      // A greeting still being spoken would be picked up by the mic and garble
+      // the question, so tapping the mic silences it first.
+      if (isSpeechActive()) cancelSpeech('listen')
       onResultRef.current = onResult
       wantListeningRef.current = true
       suspendedRef.current = false
@@ -366,6 +431,7 @@ export function useVoiceAssistant(language: Language, volumeLevel = 0.7): VoiceA
       try {
         rec.start()
         diag('voice', 'start-requested', { lang: rec.lang })
+        armStartWatchdogRef.current(rec)
         return true
       } catch {
         startingRef.current = false
@@ -374,7 +440,7 @@ export function useVoiceAssistant(language: Language, volumeLevel = 0.7): VoiceA
         return false
       }
     },
-    [clearRestart, isSupported]
+    [clearRestart, isSupported, ownerId]
   )
 
   const hardStop = useCallback(
@@ -386,6 +452,8 @@ export function useVoiceAssistant(language: Language, volumeLevel = 0.7): VoiceA
       flowSeqRef.current += 1
       clearRestart()
       clearInactivity()
+      clearStartWatchdog()
+      if (micOwner?.id === ownerId) micOwner = null
       cancelSpeech('stop')
       stopRec()
       setVoiceActive(false)
@@ -393,8 +461,12 @@ export function useVoiceAssistant(language: Language, volumeLevel = 0.7): VoiceA
       setMessageKey(null)
       diag('voice', 'stop', { next: nextState })
     },
-    [clearRestart, clearInactivity, stopRec]
+    [clearRestart, clearInactivity, clearStartWatchdog, ownerId, stopRec]
   )
+
+  useEffect(() => {
+    hardStopRef.current = hardStop
+  }, [hardStop])
 
   const stopListening = useCallback(() => hardStop('idle'), [hardStop])
   const pauseVoice = useCallback(() => hardStop('paused'), [hardStop])

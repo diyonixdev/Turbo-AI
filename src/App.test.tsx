@@ -1,5 +1,5 @@
 import userEvent from '@testing-library/user-event'
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 
@@ -75,45 +75,50 @@ describe('App dashboard', () => {
     expect(screen.getByText(/recovered power/i)).toBeInTheDocument()
   })
 
-  it('opens the existing live analytics chart only in Graph Mode and supports every close path', async () => {
+  it('opens ECO Mode from the header with the speedometer and maintenance timer, and supports every close path', async () => {
     const user = userEvent.setup()
     renderApp()
 
-    const graphButton = screen.getByRole('button', { name: 'Performance Analytics' })
     const header = document.querySelector('.topbar')
-    expect(header).toContainElement(graphButton)
-    expect(screen.queryByRole('dialog', { name: 'PERFORMANCE ANALYTICS' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('combobox', { name: 'Performance metric' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Chart range 1M' })).not.toBeInTheDocument()
+    const ecoButton = screen.getByRole('button', { name: 'ECO Mode' })
+    expect(header).toContainElement(ecoButton)
+    expect(screen.queryByRole('button', { name: 'Performance Analytics' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'ECO MODE' })).not.toBeInTheDocument()
 
-    await user.click(graphButton)
-    let dialog = screen.getByRole('dialog', { name: 'PERFORMANCE ANALYTICS' })
-    expect(within(dialog).getByText('LIVE SIMULATION')).toBeInTheDocument()
-    for (const metric of ['ENGINE RPM', 'EXHAUST TEMPERATURE', 'EXHAUST PRESSURE', 'RECOVERED POWER', 'BATTERY CHARGE']) {
-      expect(within(dialog).getAllByText(metric).length).toBeGreaterThan(0)
-    }
+    await user.click(ecoButton)
+    let dialog = screen.getByRole('dialog', { name: 'ECO MODE' })
+    expect(within(dialog).getByText('REQUIRED SPEED PARAMETER')).toBeInTheDocument()
+    expect(within(dialog).getByText('MAINTENANCE REQUIRED')).toBeInTheDocument()
+    const speedometer = within(dialog).getByRole('meter', { name: 'Current speed' })
+    const speed = Number(speedometer.getAttribute('aria-valuenow'))
+    expect(speed).toBeGreaterThanOrEqual(30)
+    expect(speed).toBeLessThanOrEqual(180)
+    expect(within(dialog).getByRole('timer', { name: 'Time until next service' })).toBeInTheDocument()
 
-    const metricSelect = within(dialog).getByRole('combobox', { name: 'Performance metric' })
-    await user.selectOptions(metricSelect, 'batteryCharge')
-    expect(metricSelect).toHaveValue('batteryCharge')
+    // Manual speed drives the maintenance clock rate: <60 km/h = 0.5x, 60–100 = 1x, >100 = 2x
+    fireEvent.change(within(dialog).getByRole('slider', { name: 'Set speed in km/h' }), { target: { value: '150' } })
+    expect(speedometer).toHaveAttribute('aria-valuenow', '150')
+    expect(within(dialog).getByLabelText('Maintenance clock running at 2x')).toBeInTheDocument()
 
-    const fiveMinuteRange = within(dialog).getByRole('button', { name: 'Chart range 5M' })
-    await user.click(fiveMinuteRange)
-    expect(fiveMinuteRange).toHaveAttribute('aria-pressed', 'true')
-    expect(within(dialog).getByRole('button', { name: 'Chart range 1M' })).toHaveAttribute('aria-pressed', 'false')
+    await user.click(within(dialog).getByRole('button', { name: 'Set LOW speed 45 km/h' }))
+    expect(speedometer).toHaveAttribute('aria-valuenow', '45')
+    expect(within(dialog).getByLabelText('Maintenance clock running at 0.5x')).toBeInTheDocument()
 
-    await user.click(within(dialog).getByRole('button', { name: 'Close Performance Analytics' }))
-    expect(screen.queryByRole('dialog', { name: 'PERFORMANCE ANALYTICS' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('combobox', { name: 'Performance metric' })).not.toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Set ECO speed 80 km/h' }))
+    expect(speedometer).toHaveAttribute('aria-valuenow', '80')
+    expect(within(dialog).getByLabelText('Maintenance clock running at 1x')).toBeInTheDocument()
 
-    await user.click(graphButton)
+    await user.click(within(dialog).getByRole('button', { name: 'Close ECO Mode' }))
+    expect(screen.queryByRole('dialog', { name: 'ECO MODE' })).not.toBeInTheDocument()
+
+    await user.click(ecoButton)
     await user.click(screen.getByRole('presentation'))
-    expect(screen.queryByRole('dialog', { name: 'PERFORMANCE ANALYTICS' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'ECO MODE' })).not.toBeInTheDocument()
 
-    await user.click(graphButton)
-    dialog = screen.getByRole('dialog', { name: 'PERFORMANCE ANALYTICS' })
+    await user.click(ecoButton)
+    dialog = screen.getByRole('dialog', { name: 'ECO MODE' })
     await user.keyboard('{Escape}')
-    expect(screen.queryByRole('dialog', { name: 'PERFORMANCE ANALYTICS' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: 'ECO MODE' })).not.toBeInTheDocument()
   })
 
   it('shows only three clickable energy recovery assemblies with three-stage information navigation', async () => {
